@@ -7,6 +7,9 @@ mod block_body;
 
 impl<'a> Parser<'a> {
     pub(super) fn parse_statement_or_declaration(&mut self) -> Result<Statement, ParseError> {
+        if matches!(&self.current, Token::Keyword(Keyword::Const | Keyword::Let)) {
+            self.track_statement();
+        }
         if matches!(&self.current, Token::Identifier(n) if n == "using")
             && self.is_using_declaration()
         {
@@ -81,7 +84,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_statement(&mut self) -> Result<Statement, ParseError> {
-        // Depth guard: deep nesting is a catchable error, not a stack overflow.
+        // Depth guard.
         self.enter_recursion()?;
         self.track_statement();
         let r = self.parse_statement_inner();
@@ -100,8 +103,7 @@ impl<'a> Parser<'a> {
                 self.error("Lexical declaration cannot appear in a single-statement context")
             );
         }
-        // In strict mode, `let` is always a keyword (declaration not allowed in single-stmt).
-        // In sloppy mode, `let [` is always a SyntaxError per ExpressionStatement lookahead.
+        // Strict `let` is a keyword; sloppy `let [` is a SyntaxError (ExpressionStatement lookahead).
         if matches!(&self.current, Token::Keyword(Keyword::Let)) {
             if self.strict {
                 return Err(
@@ -502,7 +504,7 @@ impl<'a> Parser<'a> {
         self.eat(&Token::LeftParen)?;
         let test = self.parse_cond()?;
         self.eat(&Token::RightParen)?;
-        // §12.9.1 special ASI rule: semicolon after do-while's `)` is always auto-inserted
+        // §12.9.1: a semicolon after do-while's `)` is always inserted
         if self.current == Token::Semicolon {
             self.advance()?;
         }
@@ -1110,7 +1112,7 @@ impl<'a> Parser<'a> {
         };
         self.eat(&Token::RightParen)?;
         let body = self.parse_iteration_body()?;
-        // §14.7.4.2: BoundNames of LexicalDeclaration must not overlap VarDeclaredNames of Statement
+        // §14.7.4.2: BoundNames must not overlap VarDeclaredNames
         if let Some(ForInit::Variable(ref vd)) = init
             && matches!(
                 vd.kind,
@@ -1208,7 +1210,7 @@ impl<'a> Parser<'a> {
         while self.current != Token::RightBrace {
             let test = if self.current == Token::Keyword(Keyword::Case) {
                 self.advance()?;
-                let expr = self.parse_cond()?;
+                let expr = self.parse_expression()?;
                 self.eat(&Token::Colon)?;
                 Some(expr)
             } else {

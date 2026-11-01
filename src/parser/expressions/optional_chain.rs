@@ -48,7 +48,7 @@ impl Parser<'_> {
             Expression::Identifier(name)
         };
         // Keep consuming .prop, [expr], () in the same optional chain
-        let mut called = matches!(prop, Expression::Call(..));
+        let mut called = true;
         loop {
             match &self.current {
                 Token::Dot => {

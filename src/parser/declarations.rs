@@ -132,7 +132,7 @@ impl<'a> Parser<'a> {
             self.eat(&Token::RightParen)?;
             return Ok(());
         }
-        // DecoratorMemberExpression: starts with IdentifierReference, then chains of .name or .#name
+        // DecoratorMemberExpression: IdentifierReference then .name or .#name
         match &self.current {
             Token::Identifier(_)
             | Token::IdentifierWithEscape(_)

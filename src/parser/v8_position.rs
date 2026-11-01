@@ -126,6 +126,13 @@ pub(super) fn enter_function() -> Track {
     outer
 }
 
+/// The state of a function whose parameter list starts at `position`.
+pub(super) fn start_at(position: u32) {
+    if inferred_names::enabled() {
+        update(|t| t.last = position);
+    }
+}
+
 /// `target = value`: the target is stored, not read. An identifier or a
 /// pattern leaves no trace; a member access keeps the reads of its object
 /// and key but not its own property load, the event just recorded.
@@ -159,9 +166,9 @@ pub(super) fn end_node(depth: usize) {
     }
     let position = NODE.get();
     let waiting = FRAMES.with_borrow_mut(|frames| {
-        let waiting = frames.pop().unwrap_or_default();
+        let waiting = frames.get_mut(depth - 1).map(std::mem::take);
         frames.truncate(depth - 1);
-        waiting
+        waiting.unwrap_or_default()
     });
     RESOLVED.with_borrow_mut(|slots| {
         for slot in waiting {
@@ -224,6 +231,7 @@ impl Parser<'_> {
     /// The parameters of a function, which V8 compiles inside the function.
     pub(super) fn parse_formal_parameters(&mut self) -> Result<Vec<Pattern>, ParseError> {
         let outer = enter_function();
+        start_at(at(self.current_token_start));
         let result = self.parse_param_list();
         restore(outer);
         result

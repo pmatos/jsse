@@ -201,7 +201,7 @@ impl Interpreter {
         });
         Some(match printable {
             Some(source) => format!("{} is not async iterable", expr_text(source)),
-            None => format!("{} is not a function", self.v8_call_site_text(&method)),
+            None => format!("{method} is not a function"),
         })
     }
 }

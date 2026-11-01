@@ -702,3 +702,26 @@ id(1,
   IMP);
 === real-await-arg2 | 1:25
 async function f() { id(await n, IMP); } f();
+=== review-opt-dot | 1:5
+o?.g.h(IMP);
+=== review-opt-dot-2 | 1:5
+o?.p.toString(IMP);
+=== review-opt-key-dot | 1:9
+o?.["g"].h(IMP);
+=== review-case-imp | 1:1
+switch (n) { case IMP: }
+=== review-case-imp-2 | 1:1
+switch (0) { case 1: case IMP: }
+=== review-or-chain | 1:17
+const f = () => 0 || 0 || IMP; f();
+=== review-or-chain-3 | 1:17
+const f = () => 0 || 0 || 0 || IMP; f();
+=== review-nullish-chain | 1:17
+const f = () => null ?? null ?? IMP; f();
+=== review-and-chain | 1:22
+const f = () => n && n && IMP; f();
+=== review-param-default | 1:12
+function f2(a = IMP) {}; f2();
+=== review-let-pattern | 2:12
+fn();
+let { a1 = id(IMP) } = {};

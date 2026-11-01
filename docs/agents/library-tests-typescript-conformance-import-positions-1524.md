@@ -31,12 +31,12 @@ the way V8's bytecode generator emits positions (`src/parser/v8_position.rs`):
 - Stores are not reads: `w = v` forgets the identifier `w`, `o.p = v` forgets the property load of `p`, a binding
   pattern forgets its names (`store_target`). `typeof name` does not load with a position.
 - A function (declaration, expression, method, arrow, class static block, field initializer) starts with an empty
-  state, including its parameters (`enter_function`, in `with_function_context` and `parse_formal_parameters`). An
+  state, including its parameters (`enter_function`, in `with_function_context` and `parse_formal_parameters`). A parameter list starts at its `(` (`start_at`). An
   arrow's parameter list is parsed first as an expression and its events are undone when `=>` follows
   (`track_primary_end`).
 - **Statement positions that are a node's position.** A `while`/`do`/`for` condition, a `for` update, a `case` test, a
   `for-in/of` subject, the right operand of a comma and the concise body of an arrow take the position V8 gives that
-  *node* (`a && b`: the `&&`; `a ?? b`: the `b`; `a ? b : c`: the `a`; `f(x)`: `f`; `a.b`: `b`; `await x`: the
+  *node* (`a && b`: the `&&`, or the start of a run of the same operator; `a ?? b`: the `b`; `a ? b : c`: the `a`; `f(x)`: `f`; `a.b`: `b`; `await x`: the
   `await`; `i = x`: the `=`), which is known after the node is parsed. `begin_node`/`end_node` set a marker as the
   statement position; an `import()` that reads the marker gets an index into a table (`SLOT`, resolved at run time by
   `v8_position::resolve` in `eval.rs`, only when it reads one), filled when the node is complete. The `NODE` register
@@ -54,7 +54,7 @@ the optional chain arm of `parse_left_hand_side_expression` (`expressions/option
 
 ## Verification
 
-`tests/node-import-positions-1524/shapes.txt` holds 332 module bodies with the position Node v26.8.2 reports
+`tests/node-import-positions-1524/shapes.txt` holds 343 module bodies with the position Node v26.8.2 reports
 (`LINE:COLUMN`); `scripts/run-node-import-positions-1524-oracle.py [--node]` runs them on jsse (and Node) and
 `--node` rewrites the expectations. The shapes were found by probing, then re-probed blind: the first 110 shapes came
 from the rules in the 1484 document (87 differed before the change), the next 148 and 83 were written afterwards to find
