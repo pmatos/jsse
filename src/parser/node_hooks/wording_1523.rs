@@ -57,6 +57,9 @@ impl<'a> Parser<'a> {
     /// What follows `import.` is neither `meta` nor a phase.
     pub(in crate::parser) fn import_dot_error(&self) -> ParseError {
         if inferred_names::enabled() {
+            if matches!(&self.current, Token::IdentifierWithEscape(n) if n == "meta") {
+                return self.escaped_word_error("import.meta");
+            }
             return self.error(self.v8_unexpected());
         }
         self.error("Expected 'meta', 'defer', or 'source' after 'import.'")
@@ -118,11 +121,17 @@ impl<'a> Parser<'a> {
     /// The token where a class name was expected. The class is strict, but V8
     /// words `yield` of a generator and an escaped strict word by their own
     /// rules there.
-    pub(in crate::parser) fn class_name_text(&self) -> ParseError {
+    pub(in crate::parser) fn class_name_text(&self, outer_strict: bool) -> ParseError {
         if !inferred_names::enabled() {
             return self.error("Expected class name");
         }
         match &self.current {
+            Token::IdentifierWithEscape(name)
+                if outer_strict
+                    && super::super::v8_messages::STRICT_WORDS.contains(&name.as_str()) =>
+            {
+                self.error("Keyword must not contain escaped characters")
+            }
             Token::IdentifierWithEscape(name) if name == "yield" && self.in_generator => {
                 self.error("Unexpected identifier 'yield'")
             }
@@ -162,6 +171,10 @@ impl<'a> Parser<'a> {
     pub(in crate::parser) fn escaped_class_name(&self, name: &str) -> ParseError {
         if name == "yield" && self.in_generator && inferred_names::enabled() {
             return self.error("Unexpected identifier 'yield'");
+        }
+        let reserved = super::super::v8_messages::STRICT_WORDS.contains(&name);
+        if self.strict && reserved && inferred_names::enabled() {
+            return self.error("Keyword must not contain escaped characters");
         }
         self.error(format!("Unexpected strict mode reserved word '{name}'"))
     }

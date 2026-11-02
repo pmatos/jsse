@@ -89,6 +89,7 @@ impl<'a> Parser<'a> {
 
     /// `class C extends <LeftHandSideExpression>` is never a pattern.
     pub(super) fn parse_heritage_expression(&mut self) -> Result<Expression, ParseError> {
+        self.heritage_arrow()?;
         let outer = self.begin_cover_list();
         let expr = self.parse_left_hand_side_expression()?;
         self.end_cover_list(outer, false)?;
