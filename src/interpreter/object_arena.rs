@@ -563,10 +563,9 @@ impl ObjectArena {
 
 impl Drop for ObjectArena {
     fn drop(&mut self) {
-        // No future allocation can reuse blocks after the arena starts
-        // dropping. Avoid filling a free list while its live slots are torn
-        // down; escaped handles still keep the backing chunks alive until they
-        // are released.
+        // The arena is dropping, so no allocation can reuse blocks: stop
+        // filling the free list while live slots are torn down. Escaped
+        // handles keep the backing chunks alive until they are released.
         self.storage.recycle_blocks.set(false);
     }
 }
@@ -577,6 +576,7 @@ impl Default for ObjectArena {
     }
 }
 
+mod prefetch;
 #[cfg(test)]
 #[path = "object_arena_tests.rs"]
 mod tests;

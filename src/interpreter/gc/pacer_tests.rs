@@ -118,43 +118,6 @@ fn nursery_threshold_requests_minor_collection() {
 }
 
 #[test]
-fn nursery_grows_with_the_environment_registry_up_to_a_cap() {
-    let mut pacer = GcPacer::new();
-    pacer.end_major_collection(10_000_000);
-    let charge_until_minor = |pacer: &mut GcPacer| {
-        let mut charged = 0;
-        while !pacer.is_requested() {
-            pacer.charge_object(true);
-            charged += 1;
-        }
-        let kind = pacer.begin_collection();
-        assert_eq!(kind, Some(CollectionKind::Minor));
-        pacer.end_minor_collection();
-        charged
-    };
-
-    pacer.retune_nursery(1_000);
-    assert_eq!(
-        charge_until_minor(&mut pacer),
-        8_192,
-        "small registry: base"
-    );
-
-    pacer.retune_nursery(65_536);
-    assert_eq!(
-        charge_until_minor(&mut pacer),
-        16_384,
-        "8 MiB at 128 B per env"
-    );
-
-    pacer.retune_nursery(10_000_000);
-    assert_eq!(charge_until_minor(&mut pacer), 131_072, "capped at 64 MiB");
-
-    pacer.retune_nursery(0);
-    assert_eq!(charge_until_minor(&mut pacer), 8_192, "shrinks back");
-}
-
-#[test]
 fn byte_threshold_requests_collection() {
     let mut pacer = GcPacer::new();
     pacer.track_external(1024);

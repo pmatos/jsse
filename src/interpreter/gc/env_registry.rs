@@ -68,6 +68,7 @@ impl EnvRegistry {
     }
 
     /// Environments registered by this interpreter.
+    #[cfg(any(test, feature = "perf-counters"))]
     pub(crate) fn len(&self) -> usize {
         SLAB.with_borrow(|slab| slab.live[self.owner as usize])
     }

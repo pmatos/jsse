@@ -1,6 +1,7 @@
 use super::*;
 
 pub(crate) mod env_registry;
+mod minor_sweep;
 mod module_roots;
 mod pacer;
 
@@ -240,7 +241,6 @@ impl Interpreter {
                 #[cfg(feature = "perf-counters")]
                 let start = std::time::Instant::now();
                 self.gc_collect_minor();
-                self.gc.retune_nursery(self.env_registry.len());
                 #[cfg(feature = "perf-counters")]
                 {
                     let nanos = start.elapsed().as_nanos();
@@ -253,7 +253,6 @@ impl Interpreter {
                 #[cfg(feature = "perf-counters")]
                 let start = std::time::Instant::now();
                 self.gc_collect_major();
-                self.gc.retune_nursery(self.env_registry.len());
                 #[cfg(feature = "perf-counters")]
                 {
                     self.perf.gc_major += 1;
@@ -779,23 +778,7 @@ impl Interpreter {
             phase_clock = self.perf.gc_minor_profile.lap(profile::TRACE, phase_clock);
         }
         let nursery = self.objects.take_nursery();
-        let mut survivors = Vec::with_capacity(nursery.len());
-        for &id in &nursery {
-            let Some(handle) = self.objects.get(id) else {
-                continue;
-            };
-            if !handle.is_young_marked() {
-                self.free_gc_object(id);
-            } else if handle.age_survivor(GC_PROMOTION_AGE) {
-                handle.promote();
-                if young.has_young_edge(id) || Self::has_untraceable_young_edges(&handle) {
-                    handle.remember_if_old();
-                }
-            } else {
-                handle.clear_young_mark();
-                survivors.push(id);
-            }
-        }
+        let survivors = self.sweep_nursery(&nursery, &young);
         young.clear(&nursery);
         self.gc_young = young;
         #[cfg(feature = "perf-counters")]
