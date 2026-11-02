@@ -1,5 +1,6 @@
 use super::super::*;
 use super::array_dense;
+use super::array_search::{self, Search};
 use super::array_transform::{self, Transform};
 use super::find_via_predicate::FindMethod;
 use super::predicate_quantification::{self, Quantifier};
@@ -1321,147 +1322,17 @@ impl Interpreter {
 
         // Array.prototype.indexOf
         self.define_method(proto_id, "indexOf", 1, |interp, this_val, args| {
-            let o = match to_object_val(interp, this_val) {
-                Ok(v) => v,
-                Err(c) => return c,
-            };
-            let len = match length_of_array_like(interp, &o) {
-                Ok(v) => v,
-                Err(c) => return c,
-            };
-            if len == 0 {
-                return Completion::Normal(JsValue::number(-1.0));
-            }
-            let search = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-            let n = if args.len() >= 2 {
-                match interp.to_integer_or_infinity_value(&args[1]) {
-                    Ok(v) => v,
-                    Err(e) => return Completion::Throw(e),
-                }
-            } else {
-                0.0
-            };
-            if n >= len as f64 {
-                return Completion::Normal(JsValue::number(-1.0));
-            }
-            let k = if n >= 0.0 {
-                n as usize
-            } else {
-                let calc = len as f64 + n;
-                if calc < 0.0 { 0 } else { calc as usize }
-            };
-            let (found, resume) =
-                array_dense::scan_forward(interp, &o, k, len, |v| strict_equality(v, &search));
-            if let Some(i) = found {
-                return Completion::Normal(JsValue::number(i as f64));
-            }
-            for i in resume..len {
-                match get_if_present(interp, &o, i) {
-                    Ok(Some(elem)) => {
-                        if strict_equality(&elem, &search) {
-                            return Completion::Normal(JsValue::number(i as f64));
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(c) => return c,
-                }
-            }
-            Completion::Normal(JsValue::number(-1.0))
+            array_search::search(interp, Search::ArrayIndexOf, this_val, args)
         });
 
         // Array.prototype.lastIndexOf
         self.define_method(proto_id, "lastIndexOf", 1, |interp, this_val, args| {
-            let o = match to_object_val(interp, this_val) {
-                Ok(v) => v,
-                Err(c) => return c,
-            };
-            let len = match length_of_array_like(interp, &o) {
-                Ok(v) => v,
-                Err(c) => return c,
-            };
-            if len == 0 {
-                return Completion::Normal(JsValue::number(-1.0));
-            }
-            let search = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-            let n = if args.len() >= 2 {
-                match interp.to_integer_or_infinity_value(&args[1]) {
-                    Ok(v) => v,
-                    Err(e) => return Completion::Throw(e),
-                }
-            } else {
-                len as f64 - 1.0
-            };
-            let k = if n >= 0.0 {
-                (n as usize).min(len - 1)
-            } else {
-                let calc = len as f64 + n;
-                if calc < 0.0 {
-                    return Completion::Normal(JsValue::number(-1.0));
-                }
-                calc as usize
-            };
-            let (found, resume) =
-                array_dense::scan_backward(interp, &o, k, |v| strict_equality(v, &search));
-            if let Some(i) = found {
-                return Completion::Normal(JsValue::number(i as f64));
-            }
-            for i in (0..resume).rev() {
-                match get_if_present(interp, &o, i) {
-                    Ok(Some(elem)) => {
-                        if strict_equality(&elem, &search) {
-                            return Completion::Normal(JsValue::number(i as f64));
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(c) => return c,
-                }
-            }
-            Completion::Normal(JsValue::number(-1.0))
+            array_search::search(interp, Search::ArrayLastIndexOf, this_val, args)
         });
 
         // Array.prototype.includes
         self.define_method(proto_id, "includes", 1, |interp, this_val, args| {
-            let o = match to_object_val(interp, this_val) {
-                Ok(v) => v,
-                Err(c) => return c,
-            };
-            let len = match length_of_array_like(interp, &o) {
-                Ok(v) => v,
-                Err(c) => return c,
-            };
-            if len == 0 {
-                return Completion::Normal(JsValue::boolean(false));
-            }
-            let search = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-            let n = if args.len() >= 2 {
-                match interp.to_integer_or_infinity_value(&args[1]) {
-                    Ok(v) => v,
-                    Err(e) => return Completion::Throw(e),
-                }
-            } else {
-                0.0
-            };
-            let k = if n >= 0.0 {
-                n as usize
-            } else {
-                let calc = len as f64 + n;
-                if calc < 0.0 { 0 } else { calc as usize }
-            };
-            let (found, resume) =
-                array_dense::scan_forward(interp, &o, k, len, |v| same_value_zero(v, &search));
-            if found.is_some() {
-                return Completion::Normal(JsValue::boolean(true));
-            }
-            for i in resume..len {
-                let elem = match get_index(interp, &o, i) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                if same_value_zero(&elem, &search) {
-                    return Completion::Normal(JsValue::boolean(true));
-                }
-            }
-            Completion::Normal(JsValue::boolean(false))
+            array_search::search(interp, Search::ArrayIncludes, this_val, args)
         });
 
         // Array.prototype.join
