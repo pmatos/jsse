@@ -142,11 +142,11 @@ impl Interpreter {
         if let Some(op_id) = self.realm().object_prototype {
             self.get_object_cell_expect(proto_id)
                 .borrow_mut()
-                .prototype_id = Some(op_id);
+                .set_proto(Some(op_id));
         }
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Intl.PluralRules";
+            .set_class("Intl.PluralRules");
 
         // @@toStringTag
         self.define_to_string_tag(proto_id, "Intl.PluralRules");
@@ -285,7 +285,7 @@ impl Interpreter {
                             interp
                                 .get_object_cell_expect(result_id)
                                 .borrow_mut()
-                                .prototype_id = Some(op_id);
+                                .set_proto(Some(op_id));
                         }
 
                         // Spec order: locale, type, notation, minimumIntegerDigits,
@@ -956,8 +956,8 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
                 let obj_id = interp.create_object_id();
-                interp.get_object_cell_expect(obj_id).borrow_mut().prototype_id = Some(proto);
-                interp.get_object_cell_expect(obj_id).borrow_mut().class_name = "Intl.PluralRules";
+                interp.get_object_cell_expect(obj_id).borrow_mut().set_proto(Some(proto));
+                interp.get_object_cell_expect(obj_id).borrow_mut().set_class("Intl.PluralRules");
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind = crate::interpreter::types::ObjectKind::Intl(Box::new(IntlData::PluralRules(PluralRulesState::new(PluralRulesOptions {
                     locale,
                     plural_type,

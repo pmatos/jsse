@@ -37,7 +37,7 @@ impl Interpreter {
             if let Some(descriptor) = object.get_own_property(key) {
                 return descriptor_holds(&descriptor, func);
             }
-            id = object.prototype_id;
+            id = object.proto_id();
         }
         false
     }
@@ -85,7 +85,7 @@ impl Interpreter {
                 }
                 found = Some(key.to_string());
             }
-            id = object.prototype_id;
+            id = object.proto_id();
         }
         found
     }

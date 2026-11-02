@@ -210,8 +210,8 @@ pub(super) fn uint8array_from_vec(interp: &mut Interpreter, bytes: Vec<u8>) -> J
     let ab_proto = interp.realm().arraybuffer_prototype;
     {
         let mut ab = interp.get_object_cell_expect(ab_id).borrow_mut();
-        ab.class_name = "ArrayBuffer";
-        ab.prototype_id = ab_proto;
+        ab.set_class("ArrayBuffer");
+        ab.set_proto(ab_proto);
         ab.kind = ObjectKind::ArrayBuffer(Box::new(ArrayBufferData {
             data: buf_rc,
             detached: Some(detached),

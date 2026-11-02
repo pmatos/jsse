@@ -88,7 +88,7 @@ pub(crate) fn json_stringify_full(
                     Some(JsPropertyKey::from(number_ops::to_string(n)))
                 } else if let Some(item_id) = item.as_object_id() {
                     if let Some(inner) = interp.get_object_cell(item_id) {
-                        let cn = inner.borrow().class_name;
+                        let cn = inner.borrow().class_str();
                         if cn == "String" || cn == "Number" {
                             let s = interp.with_gc_root_scope(|interp| {
                                 interp.gc_root_value(&item);
@@ -245,7 +245,7 @@ fn json_stringify_walk(
     // Step 4: Unwrap wrapper objects per spec (ToNumber/ToString trigger valueOf/toString)
     if let Some(value_id) = value.as_object_id() {
         let class = if let Some(cell) = interp.get_object_cell(value_id) {
-            cell.borrow().class_name
+            cell.borrow().class_str()
         } else {
             ""
         };
@@ -257,14 +257,14 @@ fn json_stringify_walk(
             "String" => value = JsValue::string(interp.to_js_string(&value)?),
             "Boolean" => {
                 if let Some(cell) = interp.get_object_cell(value_id)
-                    && let Some(pv) = cell.borrow().primitive_value.clone()
+                    && let Some(pv) = cell.borrow().primitive_value().cloned()
                 {
                     value = pv;
                 }
             }
             "BigInt" => {
                 if let Some(cell) = interp.get_object_cell(value_id)
-                    && let Some(pv) = cell.borrow().primitive_value.clone()
+                    && let Some(pv) = cell.borrow().primitive_value().cloned()
                 {
                     value = pv;
                 }
@@ -312,7 +312,7 @@ fn json_stringify_walk(
             if obj.borrow().callable.is_some() {
                 return Ok(false);
             }
-            let obj_id = obj.borrow().id.unwrap();
+            let obj_id = obj.id();
             if stack.contains(&obj_id) {
                 return Err(interp.json_cycle_error(stack, obj_id, key));
             }

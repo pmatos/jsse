@@ -79,7 +79,7 @@ fn nested_function_body_resets_counters() {
         info: Default::default(),
     };
     let mut outer = body_with(vec![expr_stmt(call(
-        Expression::Function(func),
+        Expression::Function(Box::new(func)),
         vec![prop(ident("o"), "x")],
     ))]);
     assign_ic_sites(&mut outer);

@@ -32,7 +32,7 @@ impl Interpreter {
                 if let Some(space_id) = space_val.as_object_id()
                     && let Some(obj) = interp.get_object_cell(space_id)
                 {
-                    let cn = obj.borrow().class_name;
+                    let cn = obj.borrow().class_str();
                     if cn == "Number" {
                         match interp.to_number_value(&space_val) {
                             Ok(n) => space_val = JsValue::number(n),
@@ -184,7 +184,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .prototype_id = None;
+                    .set_proto(None);
                 {
                     let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
                     let desc = PropertyDescriptor::data(

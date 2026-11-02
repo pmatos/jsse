@@ -164,7 +164,7 @@ impl Interpreter {
                             && let Some(result_id) = result.as_object_id()
                             && let Some(fobj) = interp.get_object_cell(result_id)
                         {
-                            fobj.borrow_mut().prototype_id = Some(p);
+                            fobj.borrow_mut().set_proto(Some(p));
                         }
                         Completion::Normal(result)
                     } else {
@@ -280,14 +280,14 @@ impl Interpreter {
                 };
                 {
                     // Set Function.prototype's [[Prototype]] to Object.prototype_id
-                    if fp.borrow().prototype_id.is_none() {
-                        fp.borrow_mut().prototype_id = self.realm().object_prototype;
+                    if fp.borrow().proto_id().is_none() {
+                        fp.borrow_mut().set_proto(self.realm().object_prototype);
                     }
                     // Ensure function_prototype is set
-                    self.realm_mut().function_prototype = Some(fp.borrow().id.unwrap());
+                    self.realm_mut().function_prototype = Some(fp.id());
 
                     // Install call/apply/bind/toString on Function.prototype_id
-                    let fp_id = fp.borrow().id.unwrap();
+                    let fp_id = fp.id();
                     self.setup_function_prototype(fp_id);
 
                     // Add Function.prototype[@@hasInstance]
@@ -414,12 +414,12 @@ impl Interpreter {
                     // Function was registered. Walk global bindings 3 levels deep:
                     // global → Constructor → prototype → method
                     // Also fix accessor get/set functions.
-                    let fp_id = fp.borrow().id;
+                    let fp_id = Some(fp.id());
 
                     // Helper: fix a single object's prototype if it's callable
                     let fix_callable = |obj: &ObjectHandle, fp: &ObjectHandle| {
                         if obj.borrow().callable.is_some() {
-                            obj.borrow_mut().prototype_id = Some(fp.borrow().id.unwrap());
+                            obj.borrow_mut().set_proto(Some(fp.id()));
                         }
                     };
 
@@ -496,7 +496,7 @@ impl Interpreter {
                     .collect();
                     for sp_id in special_proto_ids {
                         if let Some(special_proto) = self.get_object_cell(sp_id) {
-                            special_proto.borrow_mut().prototype_id = Some(fp.borrow().id.unwrap());
+                            special_proto.borrow_mut().set_proto(Some(fp.id()));
                         }
                     }
 
@@ -554,7 +554,7 @@ impl Interpreter {
                         .and_then(JsValue::as_object_id)
                         && let Some(te_obj) = self.get_object_cell(thrower_id)
                     {
-                        te_obj.borrow_mut().prototype_id = Some(fp.borrow().id.unwrap());
+                        te_obj.borrow_mut().set_proto(Some(fp.id()));
                     }
                 }
             }
@@ -584,7 +584,7 @@ impl Interpreter {
                     if let Some(ctor_id) = ctor_val.and_then(|v| v.as_object_id())
                         && let Some(ctor_obj) = self.get_object_cell(ctor_id)
                     {
-                        ctor_obj.borrow_mut().prototype_id = Some(err_data.borrow().id.unwrap());
+                        ctor_obj.borrow_mut().set_proto(Some(err_data.id()));
                     }
                 }
             }
@@ -598,7 +598,7 @@ impl Interpreter {
             let af_proto_id = self.create_object_id();
             self.get_object_cell_expect(af_proto_id)
                 .borrow_mut()
-                .class_name = "AsyncFunction";
+                .set_class("AsyncFunction");
 
             // [[Prototype]] = Function.prototype_id
             if let Some(func_val) = self.get_global_var("Function")
@@ -610,7 +610,7 @@ impl Interpreter {
             {
                 self.get_object_cell_expect(af_proto_id)
                     .borrow_mut()
-                    .prototype_id = Some(func_proto.borrow().id.unwrap());
+                    .set_proto(Some(func_proto.id()));
             }
 
             // Symbol.toStringTag = "AsyncFunction"
@@ -688,7 +688,7 @@ impl Interpreter {
                             match proto {
                                 Ok(Some(proto_rc)) => {
                                     if let Some(fo_obj) = interp.get_object_cell(function_id) {
-                                        fo_obj.borrow_mut().prototype_id = Some(proto_rc);
+                                        fo_obj.borrow_mut().set_proto(Some(proto_rc));
                                     }
                                 }
                                 Ok(None) => {}
@@ -716,9 +716,9 @@ impl Interpreter {
                 if let Some(function_id) = function_ctor.as_object_id()
                     && let Some(fc_obj) = self.get_object_cell(function_id)
                 {
-                    af.borrow_mut().prototype_id = Some(fc_obj.borrow().id.unwrap());
+                    af.borrow_mut().set_proto(Some(fc_obj.id()));
                 }
-                let proto_id = af_proto.borrow().id.unwrap();
+                let proto_id = af_proto.id();
                 // Set AsyncFunction.prototype_id
                 af.borrow_mut().insert_property(
                     "prototype".to_string(),
@@ -799,7 +799,7 @@ impl Interpreter {
                             match proto {
                                 Ok(Some(proto_rc)) => {
                                     if let Some(fo_obj) = interp.get_object_cell(function_id) {
-                                        fo_obj.borrow_mut().prototype_id = Some(proto_rc);
+                                        fo_obj.borrow_mut().set_proto(Some(proto_rc));
                                     }
                                 }
                                 Ok(None) => {}
@@ -827,9 +827,9 @@ impl Interpreter {
                 if let Some(function_id) = function_ctor.as_object_id()
                     && let Some(fc_obj) = self.get_object_cell(function_id)
                 {
-                    gf.borrow_mut().prototype_id = Some(fc_obj.borrow().id.unwrap());
+                    gf.borrow_mut().set_proto(Some(fc_obj.id()));
                 }
-                let proto_id = gf_proto.borrow().id.unwrap();
+                let proto_id = gf_proto.id();
                 // Set GeneratorFunction.prototype_id
                 gf.borrow_mut().insert_property(
                     "prototype".to_string(),
@@ -912,7 +912,7 @@ impl Interpreter {
                             match proto {
                                 Ok(Some(proto_rc)) => {
                                     if let Some(fo_obj) = interp.get_object_cell(function_id) {
-                                        fo_obj.borrow_mut().prototype_id = Some(proto_rc);
+                                        fo_obj.borrow_mut().set_proto(Some(proto_rc));
                                     }
                                 }
                                 Ok(None) => {}
@@ -940,9 +940,9 @@ impl Interpreter {
                 if let Some(function_id) = function_ctor.as_object_id()
                     && let Some(fc_obj) = self.get_object_cell(function_id)
                 {
-                    agf.borrow_mut().prototype_id = Some(fc_obj.borrow().id.unwrap());
+                    agf.borrow_mut().set_proto(Some(fc_obj.id()));
                 }
-                let proto_id = agf_proto.borrow().id.unwrap();
+                let proto_id = agf_proto.id();
                 // Set AsyncGeneratorFunction.prototype_id
                 agf.borrow_mut().insert_property(
                     "prototype".to_string(),

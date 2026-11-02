@@ -7,6 +7,7 @@
 use super::*;
 
 mod wording_1523;
+mod wording_1523_tail;
 
 impl<'a> Parser<'a> {
     /// `import(spec)`: the position V8 reports for the call, which follows the
@@ -116,6 +117,11 @@ impl<'a> Parser<'a> {
 
     /// V8's text for an identifier written with a unicode escape (`await`).
     fn escaped_identifier_text(&self, name: &str) -> String {
+        if name == "of"
+            && let Some(text) = self.escaped_of_text()
+        {
+            return text.to_string();
+        }
         let text = match name {
             "let" => "Keyword must not contain escaped characters",
             "await" => "Unexpected reserved word",
@@ -197,11 +203,12 @@ impl<'a> Parser<'a> {
         ))
     }
 
-    /// Whether the `(` that opens the head being parsed follows `for await`.
-    fn in_for_await_head(&self) -> bool {
+    /// The two words before the `(` that opens the parenthesis being parsed
+    /// (innermost word first), found in the source text.
+    pub(super) fn words_before_open_paren(&self) -> Vec<&str> {
         let src = &self.source_text_source[..self.current_token_start];
         let mut depth = 0usize;
-        let Some(open) = src.bytes().rposition(|c| match c {
+        let open = src.bytes().rposition(|c| match c {
             b')' => {
                 depth += 1;
                 false
@@ -212,11 +219,15 @@ impl<'a> Parser<'a> {
                 false
             }
             _ => false,
-        }) else {
-            return false;
-        };
-        let words: Vec<&str> = src[..open].split_whitespace().rev().take(2).collect();
-        words == ["await", "for"]
+        });
+        open.map_or_else(Vec::new, |open| {
+            src[..open].split_whitespace().rev().take(2).collect()
+        })
+    }
+
+    /// Whether the `(` that opens the head being parsed follows `for await`.
+    fn in_for_await_head(&self) -> bool {
+        self.words_before_open_paren() == ["await", "for"]
     }
 
     pub(super) fn var_for_in_error(&self, decls: &[VariableDeclarator]) -> ParseError {
@@ -288,7 +299,7 @@ impl<'a> Parser<'a> {
     /// `class let {}`: the class is strict while its name is read, so V8
     /// words the token as a reserved word before the caller's mode returns.
     pub(super) fn class_name_error(&mut self, outer_strict: bool) -> ParseError {
-        let error = self.class_name_text();
+        let error = self.class_name_text(outer_strict);
         self.set_strict(outer_strict);
         error
     }

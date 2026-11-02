@@ -120,14 +120,13 @@ impl Interpreter {
     pub(super) fn create_frozen_template_array(&mut self, values: Vec<JsValue>) -> JsValue {
         let len = values.len();
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype_id = self
-            .realm()
-            .array_prototype
-            .or(self.realm().object_prototype);
-        obj_data.class_name = "Array";
-        obj_data.kind = crate::interpreter::types::ObjectKind::Array(
-            crate::interpreter::types::ArrayData::default(),
+        obj_data.set_proto(
+            self.realm()
+                .array_prototype
+                .or(self.realm().object_prototype),
         );
+        obj_data.set_class("Array");
+        obj_data.kind = crate::interpreter::types::ObjectKind::Array(Box::default());
         for (i, v) in values.iter().enumerate() {
             obj_data.insert_property(
                 i.to_string(),
@@ -163,14 +162,15 @@ impl Interpreter {
     /// literals-runtime-semantics-evaluation).
     pub(crate) fn alloc_regexp_literal(&mut self, source: JsString, flags: JsString) -> JsValue {
         let mut obj = JsObjectData::new();
-        obj.prototype_id = self
-            .realm()
-            .regexp_prototype
-            .or(self.realm().object_prototype);
-        obj.class_name = "RegExp";
-        obj.kind = crate::interpreter::types::ObjectKind::RegExp(
-            crate::interpreter::types::RegExpData::new(source, flags),
+        obj.set_proto(
+            self.realm()
+                .regexp_prototype
+                .or(self.realm().object_prototype),
         );
+        obj.set_class("RegExp");
+        obj.kind = crate::interpreter::types::ObjectKind::RegExp(Box::new(
+            crate::interpreter::types::RegExpData::new(source, flags),
+        ));
         obj.insert_property(
             "lastIndex".to_string(),
             PropertyDescriptor::data(JsValue::number(0.0), true, false, false),
@@ -208,19 +208,20 @@ impl Interpreter {
 
     pub(crate) fn create_regexp(&mut self, pattern: &JsString, flags: &str) -> JsValue {
         let mut obj = JsObjectData::new();
-        obj.prototype_id = self
-            .realm()
-            .regexp_prototype
-            .or(self.realm().object_prototype);
-        obj.class_name = "RegExp";
+        obj.set_proto(
+            self.realm()
+                .regexp_prototype
+                .or(self.realm().object_prototype),
+        );
+        obj.set_class("RegExp");
         let source = if pattern.is_empty() {
             JsString::from_str("(?:)")
         } else {
             pattern.clone()
         };
-        obj.kind = crate::interpreter::types::ObjectKind::RegExp(
+        obj.kind = crate::interpreter::types::ObjectKind::RegExp(Box::new(
             crate::interpreter::types::RegExpData::new(source, JsString::from_str(flags)),
-        );
+        ));
         obj.insert_property(
             "lastIndex".to_string(),
             PropertyDescriptor::data(JsValue::number(0.0), true, false, false),
@@ -483,11 +484,11 @@ impl Interpreter {
                 && let Some(super_proto) = self.get_object_cell(sp.id)
                 && let Some(ref proto) = proto_obj
             {
-                proto.borrow_mut().prototype_id = Some(super_proto.borrow().id.unwrap());
+                proto.borrow_mut().set_proto(Some(super_proto.id()));
             } else if super_proto_val.is_null()
                 && let Some(ref proto) = proto_obj
             {
-                proto.borrow_mut().prototype_id = None;
+                proto.borrow_mut().set_proto(None);
             }
             // Step 7.a: F.[[Prototype]] = superclass (for static method inheritance)
             if let Some(o) = (ctor_val)
@@ -496,7 +497,7 @@ impl Interpreter {
                 && let Some(ctor_obj) = self.get_object_cell(o.id)
                 && let Some(super_obj) = self.get_object_cell(super_o_id)
             {
-                ctor_obj.borrow_mut().prototype_id = Some(super_obj.borrow().id.unwrap());
+                ctor_obj.borrow_mut().set_proto(Some(super_obj.id()));
             }
         }
 
@@ -504,14 +505,14 @@ impl Interpreter {
         if super_val.as_ref().is_some_and(JsValue::is_null)
             && let Some(ref proto) = proto_obj
         {
-            proto.borrow_mut().prototype_id = None;
+            proto.borrow_mut().set_proto(None);
         }
 
         // Set __home_object__ in class_env for the constructor (which uses class_env as
         // its closure directly). Non-constructor methods get per-method closures that
         // shadow this with their own __home_object__ binding.
         let ctor_home = if let Some(ref p) = proto_obj {
-            let pid = p.borrow().id.unwrap();
+            let pid = p.id();
             JsValue::object(pid)
         } else {
             JsValue::UNDEFINED
@@ -592,7 +593,7 @@ impl Interpreter {
                             let priv_home_target = if m.is_static {
                                 ctor_val.clone()
                             } else if let Some(ref p) = proto_obj {
-                                let pid = p.borrow().id.unwrap();
+                                let pid = p.id();
                                 JsValue::object(pid)
                             } else {
                                 JsValue::UNDEFINED
@@ -767,7 +768,7 @@ impl Interpreter {
                     let home_target = if m.is_static {
                         ctor_val.clone()
                     } else if let Some(ref p) = proto_obj {
-                        let pid = p.borrow().id.unwrap();
+                        let pid = p.id();
                         JsValue::object(pid)
                     } else {
                         JsValue::UNDEFINED
@@ -1266,7 +1267,7 @@ impl Interpreter {
         let gc_frame = self.gc_root_frame();
         let result = (|| {
             let mut obj_data = JsObjectData::new();
-            obj_data.prototype_id = self.realm().object_prototype;
+            obj_data.set_proto(self.realm().object_prototype);
             let mut method_values: Vec<JsValue> = Vec::new();
             for prop in props {
                 let (key, fn_name_for_key) = match static_property_key(&prop.key) {
@@ -1411,9 +1412,9 @@ impl Interpreter {
                 // Only plain property init, not methods, computed, or shorthand
                 if spec.sets_prototype(&key) {
                     if let Some(id) = value.as_object_id() {
-                        obj_data.prototype_id = Some(id);
+                        obj_data.set_proto(Some(id));
                     } else if value.is_null() {
-                        obj_data.prototype_id = None;
+                        obj_data.set_proto(None);
                     }
                 } else {
                     if spec.name_value {
@@ -1540,7 +1541,7 @@ impl Interpreter {
     ) -> JsValue {
         debug_assert_eq!(shape.props.len(), values.len());
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype_id = self.realm().object_prototype;
+        obj_data.set_proto(self.realm().object_prototype);
         obj_data.properties.reserve(values.len());
         let mut method_values: Vec<JsValue> = Vec::new();
         for (prop, value) in shape.props.iter().zip(values) {

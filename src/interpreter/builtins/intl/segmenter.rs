@@ -96,7 +96,7 @@ fn create_segment_object(
         interp
             .get_object_cell_expect(obj_id)
             .borrow_mut()
-            .prototype_id = Some(op_id);
+            .set_proto(Some(op_id));
     }
     interp
         .get_object_cell_expect(obj_id)
@@ -166,11 +166,11 @@ impl Interpreter {
         if let Some(op_id) = self.realm().object_prototype {
             self.get_object_cell_expect(proto_id)
                 .borrow_mut()
-                .prototype_id = Some(op_id);
+                .set_proto(Some(op_id));
         }
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Intl.Segmenter";
+            .set_class("Intl.Segmenter");
 
         // @@toStringTag
         self.define_to_string_tag(proto_id, "Intl.Segmenter");
@@ -199,12 +199,12 @@ impl Interpreter {
                     interp
                         .get_object_cell_expect(segments_obj_id)
                         .borrow_mut()
-                        .prototype_id = Some(op_id);
+                        .set_proto(Some(op_id));
                 }
                 interp
                     .get_object_cell_expect(segments_obj_id)
                     .borrow_mut()
-                    .class_name = "Segmenter Segments";
+                    .set_class("Segmenter Segments");
 
                 interp
                     .get_object_cell_expect(segments_obj_id)
@@ -252,7 +252,7 @@ impl Interpreter {
                         let is_segments = if let Some(o) = this.as_object_id() {
                             if let Some(obj) = interp.get_object_cell(o) {
                                 let b = obj.borrow();
-                                b.class_name == "Segmenter Segments"
+                                b.is_class("Segmenter Segments")
                                     && b.properties.contains_key("[[SegmenterInput]]")
                             } else {
                                 false
@@ -388,12 +388,12 @@ impl Interpreter {
                             interp
                                 .get_object_cell_expect(iter_obj_id)
                                 .borrow_mut()
-                                .prototype_id = Some(ip_id);
+                                .set_proto(Some(ip_id));
                         }
                         interp
                             .get_object_cell_expect(iter_obj_id)
                             .borrow_mut()
-                            .class_name = "Segmenter String Iterator";
+                            .set_class("Segmenter String Iterator");
 
                         let has_word_like = granularity_clone == "word";
 
@@ -550,7 +550,7 @@ impl Interpreter {
                     interp
                         .get_object_cell_expect(result_id)
                         .borrow_mut()
-                        .prototype_id = Some(op_id);
+                        .set_proto(Some(op_id));
                 }
 
                 let props = vec![
@@ -636,11 +636,11 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .prototype_id = Some(proto);
+                    .set_proto(Some(proto));
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .class_name = "Intl.Segmenter";
+                    .set_class("Intl.Segmenter");
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind =
                     crate::interpreter::types::ObjectKind::Intl(Box::new(IntlData::Segmenter {
                         locale,

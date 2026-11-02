@@ -46,7 +46,7 @@ impl ObjectHandle {
         unsafe {
             allocation.as_ptr().write(ObjectAllocation {
                 strong: Cell::new(1),
-                id,
+                id: id as u32,
                 generation: Cell::new(Generation::Young),
                 nursery_age: Cell::new(0),
                 young_mark: Cell::new(false),
@@ -63,6 +63,12 @@ impl ObjectHandle {
         // SAFETY: a live handle contributes to `strong`, so the allocation is
         // initialized for the lifetime of the handle.
         unsafe { self.allocation.as_ref() }
+    }
+
+    /// Slab index of this object, fixed at allocation.
+    #[inline(always)]
+    pub(crate) fn id(&self) -> u64 {
+        u64::from(self.allocation().id)
     }
 
     #[inline(always)]
@@ -206,7 +212,7 @@ impl ObjectHandle {
                     .storage
                     .remembered_ids
                     .borrow_mut()
-                    .push(allocation.id);
+                    .push(u64::from(allocation.id));
             }
         }
     }
@@ -299,8 +305,8 @@ pub(crate) struct RememberedState {
 }
 
 struct ObjectAllocation {
-    strong: Cell<usize>,
-    id: u64,
+    strong: Cell<u32>,
+    id: u32,
     generation: Cell<Generation>,
     nursery_age: Cell<u8>,
     young_mark: Cell<bool>,
@@ -388,10 +394,9 @@ impl ObjectArena {
         }
     }
 
-    /// Allocate a slot for `data`. Writes `data.id = Some(id)` before placing
-    /// it in the physical arena. Returns `(id, was_reuse)` so callers can
+    /// Allocate a slot for `data` in the physical arena. Returns `(id, was_reuse)` so callers can
     /// distinguish logical slot reuse from fresh chunk growth.
-    pub(crate) fn alloc(&mut self, mut data: JsObjectData) -> (u64, bool) {
+    pub(crate) fn alloc(&mut self, data: JsObjectData) -> (u64, bool) {
         let (id, was_reuse) = if let Some(idx) = self.free_list.pop() {
             (idx, true)
         } else {
@@ -402,7 +407,7 @@ impl ObjectArena {
             self.next_slot += 1;
             (idx, false)
         };
-        data.id = Some(id);
+        assert!(id < u64::from(u32::MAX), "object id space exhausted");
         let handle = ObjectHandle::new(&self.storage, id, data);
         self.set_slot(id, Some(handle));
         self.live_count += 1;
@@ -558,10 +563,9 @@ impl ObjectArena {
 
 impl Drop for ObjectArena {
     fn drop(&mut self) {
-        // No future allocation can reuse blocks after the arena starts
-        // dropping. Avoid filling a free list while its live slots are torn
-        // down; escaped handles still keep the backing chunks alive until they
-        // are released.
+        // The arena is dropping, so no allocation can reuse blocks: stop
+        // filling the free list while live slots are torn down. Escaped
+        // handles keep the backing chunks alive until they are released.
         self.storage.recycle_blocks.set(false);
     }
 }
@@ -574,4 +578,5 @@ impl Default for ObjectArena {
 
 mod prefetch;
 #[cfg(test)]
+#[path = "object_arena_tests.rs"]
 mod tests;

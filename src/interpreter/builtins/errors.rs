@@ -73,9 +73,9 @@ impl Interpreter {
 
                     macro_rules! init_error {
                         ($o:expr) => {
-                            $o.class_name = "Error".into();
+                            $o.set_class("Error".into());
                             if let Some(p) = proto {
-                                $o.prototype_id = Some(p);
+                                $o.set_proto(Some(p));
                             }
                             if let Some(ref ms) = msg_str {
                                 $o.insert_builtin("message".to_string(), ms.clone());
@@ -208,7 +208,7 @@ impl Interpreter {
                     //    read directly off the receiver so Proxy traps don't fire.
                     let has_error_data = interp
                         .get_object(o_id)
-                        .is_some_and(|obj| obj.borrow().class_name.contains("Error"));
+                        .is_some_and(|obj| obj.borrow().class_str().contains("Error"));
                     if !has_error_data {
                         return Completion::Normal(JsValue::UNDEFINED);
                     }
@@ -320,7 +320,7 @@ impl Interpreter {
                     if let Some(arg_id) = arg.as_object_id()
                         && let Some(obj) = interp.get_object(arg_id)
                     {
-                        let cn = &obj.borrow().class_name;
+                        let cn = &obj.borrow().class_str();
                         if cn.contains("Error") {
                             return Completion::Normal(JsValue::boolean(true));
                         }
@@ -358,9 +358,9 @@ impl Interpreter {
                         {
                             if let Some(obj) = interp.get_object(this_id) {
                                 let mut o = obj.borrow_mut();
-                                o.class_name = "Test262Error";
+                                o.set_class("Test262Error");
                                 if let Some(ref ep) = error_proto_clone {
-                                    o.prototype_id = Some(ep.borrow().id.unwrap());
+                                    o.set_proto(Some(ep.id()));
                                 }
                                 if !(msg).is_undefined() {
                                     o.insert_builtin("message".to_string(), msg);
@@ -375,9 +375,9 @@ impl Interpreter {
                         let obj_id = interp.create_object_id();
                         {
                             let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
-                            o.class_name = "Test262Error";
+                            o.set_class("Test262Error");
                             if let Some(ref ep) = error_proto_clone {
-                                o.prototype_id = Some(ep.borrow().id.unwrap());
+                                o.set_proto(Some(ep.id()));
                             }
                             if !(msg).is_undefined() {
                                 o.insert_builtin("message".to_string(), msg);
@@ -412,7 +412,7 @@ impl Interpreter {
             if let Some(ref ep) = error_prototype {
                 self.get_object_cell_expect(native_proto_id)
                     .borrow_mut()
-                    .prototype_id = Some(ep.borrow().id.unwrap());
+                    .set_proto(Some(ep.id()));
             }
             self.get_object_cell_expect(native_proto_id)
                 .borrow_mut()
@@ -492,8 +492,8 @@ impl Interpreter {
 
                     macro_rules! init_native_error {
                         ($o:expr) => {
-                            $o.class_name = error_class_name;
-                            $o.prototype_id = Some(proto);
+                            $o.set_class(error_class_name);
+                            $o.set_proto(Some(proto));
                             if let Some(ref ms) = msg_str {
                                 $o.insert_builtin("message".to_string(), ms.clone());
                             }
@@ -555,7 +555,7 @@ impl Interpreter {
             if let Some(ref ep) = error_prototype {
                 self.get_object_cell_expect(suppressed_proto_id)
                     .borrow_mut()
-                    .prototype_id = Some(ep.borrow().id.unwrap());
+                    .set_proto(Some(ep.id()));
             }
             self.get_object_cell_expect(suppressed_proto_id)
                 .borrow_mut()
@@ -600,9 +600,9 @@ impl Interpreter {
                     let obj_id = interp.create_object_id();
                     {
                         let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
-                        o.class_name = "SuppressedError";
+                        o.set_class("SuppressedError");
                         if let Some(p) = proto {
-                            o.prototype_id = Some(p);
+                            o.set_proto(Some(p));
                         }
                         // Per spec: message first, then error, then suppressed
                         if let Some(msg_str) = msg_str {
@@ -645,7 +645,7 @@ impl Interpreter {
             if let Some(ref ep) = error_prototype {
                 self.get_object_cell_expect(agg_proto_id)
                     .borrow_mut()
-                    .prototype_id = Some(ep.borrow().id.unwrap());
+                    .set_proto(Some(ep.id()));
             }
             self.get_object_cell_expect(agg_proto_id)
                 .borrow_mut()
@@ -715,8 +715,8 @@ impl Interpreter {
 
                         macro_rules! init_agg_error {
                             ($o:expr) => {
-                                $o.class_name = "AggregateError".into();
-                                $o.prototype_id = Some(proto);
+                                $o.set_class("AggregateError".into());
+                                $o.set_proto(Some(proto));
                                 if let Some(ref ms) = msg_str {
                                     $o.insert_builtin("message".to_string(), ms.clone());
                                 }

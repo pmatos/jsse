@@ -96,7 +96,7 @@ impl<'a> Parser<'a> {
             self.check_duplicate_params_strict(&params)?;
         }
         let source_text = self.source_since(source_start);
-        Ok(Statement::FunctionDeclaration(FunctionDecl {
+        Ok(Statement::FunctionDeclaration(Box::new(FunctionDecl {
             name,
             params,
             body: Body::new(body),
@@ -106,7 +106,7 @@ impl<'a> Parser<'a> {
             body_is_strict: body_strict,
             info: Default::default(),
             phase: Default::default(),
-        }))
+        })))
     }
 
     /// Consume and discard a list of decorator expressions (`@expr` prefixes).
@@ -214,12 +214,12 @@ impl<'a> Parser<'a> {
             Self::check_no_direct_super_in_constructor(&body)?;
         }
         let source_text = self.source_since(source_start);
-        Ok(Statement::ClassDeclaration(ClassDecl {
+        Ok(Statement::ClassDeclaration(Box::new(ClassDecl {
             name,
             super_class,
             body,
             source_text,
-        }))
+        })))
     }
 
     pub(super) fn parse_class_body(&mut self) -> Result<Vec<ClassElement>, ParseError> {
@@ -289,36 +289,31 @@ impl<'a> Parser<'a> {
                 match kind {
                     PrivateNameKind::Getter => {
                         if getter_static.is_some() || has_other {
-                            return Err(self
-                                .error(format!("Identifier '#{name}' has already been declared")));
+                            return Err(self.duplicate_private_name(&name));
                         }
                         // If there's a setter, staticness must match
                         if let Some(setter_is_static) = setter_static
                             && setter_is_static != is_static
                         {
-                            return Err(self
-                                .error(format!("Identifier '#{name}' has already been declared")));
+                            return Err(self.duplicate_private_name(&name));
                         }
                         entry.0 = Some(is_static);
                     }
                     PrivateNameKind::Setter => {
                         if setter_static.is_some() || has_other {
-                            return Err(self
-                                .error(format!("Identifier '#{name}' has already been declared")));
+                            return Err(self.duplicate_private_name(&name));
                         }
                         // If there's a getter, staticness must match
                         if let Some(getter_is_static) = getter_static
                             && getter_is_static != is_static
                         {
-                            return Err(self
-                                .error(format!("Identifier '#{name}' has already been declared")));
+                            return Err(self.duplicate_private_name(&name));
                         }
                         entry.1 = Some(is_static);
                     }
                     PrivateNameKind::Other => {
                         if getter_static.is_some() || setter_static.is_some() || has_other {
-                            return Err(self
-                                .error(format!("Identifier '#{name}' has already been declared")));
+                            return Err(self.duplicate_private_name(&name));
                         }
                         entry.2 = true;
                     }
@@ -582,6 +577,7 @@ impl<'a> Parser<'a> {
         let method_source_start = self.current_token_start;
 
         // Check for async method (escaped identifiers like \u0061sync don't count as async keyword)
+        self.escaped_async_member()?;
         let is_async_method = matches!(&self.current, Token::Identifier(n) if n == "async")
             || matches!(&self.current, Token::Keyword(Keyword::Async));
         if is_async_method {
@@ -614,7 +610,7 @@ impl<'a> Parser<'a> {
             let is_generator = self.eat_star()?;
             let (key, computed) = self.parse_property_name()?;
             if !is_static && !computed && Self::key_is_constructor(&key) {
-                return Err(self.error("Class constructor may not be an async method"));
+                return Err(self.error(Self::async_ctor_message(is_generator)));
             }
             if is_static && !computed && Self::key_is_prototype(&key) {
                 return Err(self.error("Classes may not have a static property named 'prototype'"));
@@ -633,10 +629,9 @@ impl<'a> Parser<'a> {
             }));
         }
 
-        // `accessor FieldName`: auto-accessor syntax (decorators proposal).
-        // Spec: `accessor [no LineTerminator here] ClassElementName`
-        // If "accessor" is followed by `;`, `=`, `}`, or a line terminator,
-        // it is just a field named "accessor", not an auto-accessor modifier.
+        // `accessor [no LineTerminator here] ClassElementName` (decorators
+        // proposal). Followed by `;`, `=`, `}` or a line terminator, it is a
+        // field named "accessor", not a modifier.
         if matches!(&self.current, Token::Identifier(n) if n == "accessor") {
             self.advance()?;
             let next_is_field_name = !self.prev_line_terminator

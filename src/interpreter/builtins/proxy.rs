@@ -28,7 +28,7 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(proxy_obj_id)
                     .borrow_mut()
-                    .class_name = "Proxy";
+                    .set_class("Proxy");
                 if let Some(target_id) = target.as_object_id()
                     && let Some(handler_id) = handler.as_object_id()
                     && let Some(target_rc) = interp.get_object_cell(target_id)
@@ -77,7 +77,7 @@ impl Interpreter {
                     interp
                         .get_object_cell_expect(proxy_obj_id)
                         .borrow_mut()
-                        .class_name = "Proxy";
+                        .set_class("Proxy");
                     if let Some(target_id) = target.as_object_id()
                         && let Some(handler_id) = handler.as_object_id()
                         && let Some(target_rc) = interp.get_object_cell(target_id)

@@ -795,7 +795,7 @@ fn with_decl_phase(stmt: &Statement, phase: DeclPhase) -> Statement {
     match stmt {
         // The copy only reads the name, so it does not carry the signature.
         Statement::FunctionDeclaration(f) if phase == DeclPhase::CopyOnly => {
-            Statement::FunctionDeclaration(FunctionDecl {
+            Statement::FunctionDeclaration(Box::new(FunctionDecl {
                 name: f.name.clone(),
                 params: Vec::new(),
                 body: f.body.clone(),
@@ -805,10 +805,13 @@ fn with_decl_phase(stmt: &Statement, phase: DeclPhase) -> Statement {
                 body_is_strict: f.body_is_strict,
                 info: Default::default(),
                 phase,
-            })
+            }))
         }
         Statement::FunctionDeclaration(f) => {
-            Statement::FunctionDeclaration(FunctionDecl { phase, ..f.clone() })
+            Statement::FunctionDeclaration(Box::new(FunctionDecl {
+                phase,
+                ..(**f).clone()
+            }))
         }
         Statement::Labeled(label, inner) => {
             Statement::Labeled(label.clone(), Box::new(with_decl_phase(inner, phase)))
@@ -951,11 +954,19 @@ fn collect_escaping_jumps(
                 scope.continue_labels.pop();
             }
         }
-        Statement::While(WhileStatement { body, .. })
-        | Statement::DoWhile(DoWhileStatement { body, .. })
-        | Statement::For(ForStatement { body, .. })
-        | Statement::ForIn(ForInStatement { body, .. })
-        | Statement::ForOf(ForOfStatement { body, .. }) => {
+        Statement::While(_)
+        | Statement::DoWhile(_)
+        | Statement::For(_)
+        | Statement::ForIn(_)
+        | Statement::ForOf(_) => {
+            let body = match stmt {
+                Statement::While(l) => &l.body,
+                Statement::DoWhile(l) => &l.body,
+                Statement::For(l) => &l.body,
+                Statement::ForIn(l) => &l.body,
+                Statement::ForOf(l) => &l.body,
+                _ => unreachable!(),
+            };
             let saved = (scope.breakable, scope.in_loop);
             scope.breakable = true;
             scope.in_loop = true;
@@ -1042,23 +1053,16 @@ fn in_class_scope(expr: &Expression, class_name: Option<&str>, is_async: bool) -
     }
     let mut stmts = vec![Statement::Return(Some(expr.clone()), 0)];
     if let Some(name) = class_name {
-        stmts.push(Statement::ClassDeclaration(ClassDecl {
+        stmts.push(Statement::ClassDeclaration(Box::new(ClassDecl {
             name: name.to_string(),
             super_class: None,
             body: Vec::new(),
             source_text: None,
-        }));
+        })));
     }
     let mut body = Body::new(stmts);
     assign_ic_sites(&mut body);
-    let arrow = Expression::ArrowFunction(ArrowFunction {
-        params: Vec::new(),
-        body: ArrowBody::Block(body),
-        is_async: false,
-        source_text: None,
-        body_is_strict: true,
-        info: Default::default(),
-    });
+    let arrow = Expression::arrow(Vec::new(), ArrowBody::Block(body), false, None, true);
     Expression::Call(ExprBox::new(arrow), Vec::new(), CallSiteId::UNASSIGNED)
 }
 
@@ -1774,7 +1778,7 @@ fn transform_yielding_expression(
 
         Expression::Class(class_expr) => {
             let class_expr = suspension_free_class_expr(class_expr, ctx);
-            emit_expression_with_binding(&Expression::Class(class_expr), &binding, ctx);
+            emit_expression_with_binding(&Expression::Class(Box::new(class_expr)), &binding, ctx);
         }
 
         Expression::Member(..) => {
@@ -1869,13 +1873,13 @@ fn transform_yielding_expression(
                     lower_operand(e, false, &prefix, ctx)
                 });
             }
-            let combined = Expression::Template(TemplateLiteral {
+            let combined = Expression::Template(Box::new(TemplateLiteral {
                 id: tpl.id,
                 quasis: tpl.quasis.clone(),
                 raw_quasis: tpl.raw_quasis.clone(),
                 raw_stand_ins: tpl.raw_stand_ins,
                 expressions: new_exprs,
-            });
+            }));
             emit_expression_with_binding(&combined, &binding, ctx);
         }
 
@@ -1888,13 +1892,13 @@ fn transform_yielding_expression(
             let new_exprs = lower_argument_list(&tpl.expressions, "ttpl", ctx);
             let combined = Expression::TaggedTemplate(
                 ExprBox::new(temp_tag),
-                TemplateLiteral {
+                Box::new(TemplateLiteral {
                     id: tpl.id,
                     quasis: tpl.quasis.clone(),
                     raw_quasis: tpl.raw_quasis.clone(),
                     raw_stand_ins: tpl.raw_stand_ins,
                     expressions: new_exprs,
-                },
+                }),
             );
             emit_expression_with_binding(&combined, &binding, ctx);
         }
@@ -2982,13 +2986,13 @@ fn settle_template_substitution(
     } else {
         expr.clone()
     };
-    let stringify = Expression::Template(TemplateLiteral {
+    let stringify = Expression::Template(Box::new(TemplateLiteral {
         id: crate::ast::next_template_id(),
         quasis: vec![Some(Vec::new()), Some(Vec::new())],
         raw_quasis: vec![String::new(), String::new()],
         raw_stand_ins: false,
         expressions: vec![operand],
-    });
+    }));
     emit_temp_assignment(&temp, stringify, ctx);
     ident(temp)
 }
@@ -3238,18 +3242,14 @@ fn transform_variable_declaration(
                 && init_suspends
             {
                 // `Expression::Class` behind a `BindingIdentifier` can hold a
-                // suspension that belongs to *this* generator/async function
-                // (heritage/computed keys evaluate eagerly in the enclosing
-                // scope; a nested function/arrow body has its own
-                // [[GeneratorKind]], so `expr_has_suspension` never looks
-                // inside one). The generic fresh-temp path below would lose
-                // NamedEvaluation for an *anonymous* class -- the temp's name
-                // is suppressed to avoid leaking into `.name`
-                // (`emit_expression_with_binding`), and the final
-                // `let <name> = <temp>;` is just an identifier reference,
-                // never itself an anonymous-function-definition. Hoisting
-                // only the suspending sub-expressions and re-embedding as a
-                // real `Statement::Variable` keeps NamedEvaluation and TDZ
+                // suspension of *this* generator/async function (heritage and
+                // computed keys evaluate eagerly in the enclosing scope). The
+                // generic fresh-temp path below would lose NamedEvaluation for
+                // an *anonymous* class: the temp's name is suppressed so it
+                // does not leak into `.name`, and `let <name> = <temp>;` is
+                // just an identifier reference. Hoisting only the suspending
+                // sub-expressions and re-embedding as a real
+                // `Statement::Variable` keeps NamedEvaluation and TDZ
                 // correct for both named and anonymous classes. Destructuring
                 // patterns are excluded: never a NamedEvaluation position, so
                 // the generic (correctly unnamed) path is fine for them.
@@ -3258,7 +3258,7 @@ fn transform_variable_declaration(
                     kind: decl.kind,
                     declarations: vec![VariableDeclarator::new(
                         declarator.pattern.clone(),
-                        Some(Expression::Class(class_expr)),
+                        Some(Expression::Class(Box::new(class_expr))),
                     )],
                 }));
             } else if init_suspends {
@@ -4426,10 +4426,10 @@ mod tests {
 
     #[test]
     fn test_while_with_yield() {
-        let body = vec![Statement::While(WhileStatement {
+        let body = vec![Statement::While(Box::new(WhileStatement {
             test: Expression::Literal(Literal::Boolean(true)),
             body: Box::new(Statement::Expression(make_yield(), 0)),
-        })];
+        }))];
         let sm = transform_generator(&body, &[]);
 
         assert_eq!(sm.num_yields, 1);
@@ -4453,7 +4453,7 @@ mod tests {
     fn test_yield_in_class_computed_key_is_decomposed() {
         // The computed key is hoisted into its own state rather than replaying
         // the whole class declaration on resume.
-        let body = vec![Statement::ClassDeclaration(ClassDecl {
+        let body = vec![Statement::ClassDeclaration(Box::new(ClassDecl {
             name: "C".to_string(),
             super_class: None,
             body: vec![ClassElement::Method(ClassMethod {
@@ -4464,7 +4464,7 @@ mod tests {
                 computed: true,
             })],
             source_text: None,
-        })];
+        }))];
         let sm = transform_generator(&body, &[]);
 
         assert_eq!(sm.num_yields, 1);
@@ -4472,7 +4472,7 @@ mod tests {
     }
 
     fn plain_class_decl() -> Statement {
-        Statement::ClassDeclaration(ClassDecl {
+        Statement::ClassDeclaration(Box::new(ClassDecl {
             name: "C".to_string(),
             super_class: Some(Box::new(ident("Base".to_string()))),
             body: vec![ClassElement::Method(ClassMethod {
@@ -4483,7 +4483,7 @@ mod tests {
                 computed: false,
             })],
             source_text: None,
-        })
+        }))
     }
 
     #[test]
@@ -4514,7 +4514,7 @@ mod tests {
     }
 
     fn for_await_stmt(body: Statement) -> Statement {
-        Statement::ForOf(ForOfStatement {
+        Statement::ForOf(Box::new(ForOfStatement {
             left: ForInOfLeft::Pattern(Pattern::Identifier("y".to_string())),
             right: ident("ys".to_string()),
             body: Box::new(body),
@@ -4522,11 +4522,11 @@ mod tests {
             at: 0,
             right_at: 0,
             scope_capture: Default::default(),
-        })
+        }))
     }
 
     fn for_of_stmt(body: Statement) -> Statement {
-        Statement::ForOf(ForOfStatement {
+        Statement::ForOf(Box::new(ForOfStatement {
             left: ForInOfLeft::Pattern(Pattern::Identifier("x".to_string())),
             right: ident("xs".to_string()),
             body: Box::new(body),
@@ -4534,7 +4534,7 @@ mod tests {
             at: 0,
             right_at: 0,
             scope_capture: Default::default(),
-        })
+        }))
     }
 
     #[test]
@@ -4546,20 +4546,20 @@ mod tests {
     }
 
     fn try_wrapping(body: Statement) -> Statement {
-        Statement::Try(TryStatement {
+        Statement::Try(Box::new(TryStatement {
             block: vec![body],
             handler: None,
             finalizer: Some(vec![]),
-        })
+        }))
     }
 
     fn if_wrapping(body: Statement) -> Statement {
-        Statement::If(IfStatement {
+        Statement::If(Box::new(IfStatement {
             test: Expression::Literal(Literal::Boolean(true)),
             consequent: Box::new(body),
             alternate: None,
             at: 0,
-        })
+        }))
     }
 
     fn block_wrapping(body: Statement) -> Statement {
@@ -4610,12 +4610,12 @@ mod tests {
             declarations: vec![VariableDeclarator {
                 init_at: 0,
                 pattern: Pattern::Identifier("C".to_string()),
-                init: Some(Expression::Class(ClassExpr {
+                init: Some(Expression::Class(Box::new(ClassExpr {
                     name: None,
                     super_class: Some(Box::new(make_yield())),
                     body: vec![],
                     source_text: None,
-                })),
+                }))),
             }],
         })];
         let sm = transform_generator(&body, &[]);
@@ -4626,14 +4626,14 @@ mod tests {
 
     #[test]
     fn test_try_with_yield() {
-        let body = vec![Statement::Try(TryStatement {
+        let body = vec![Statement::Try(Box::new(TryStatement {
             block: vec![Statement::Expression(make_yield(), 0)],
             handler: None,
             finalizer: Some(vec![Statement::Expression(
                 Expression::Literal(Literal::Number(1.0)),
                 0,
             )]),
-        })];
+        }))];
         let sm = transform_generator(&body, &[]);
 
         assert_eq!(sm.num_yields, 1);
@@ -4650,7 +4650,7 @@ mod tests {
     }
 
     fn switch_body(discriminant: Expression, tests: Vec<Expression>) -> Vec<Statement> {
-        vec![Statement::Switch(SwitchStatement {
+        vec![Statement::Switch(Box::new(SwitchStatement {
             discriminant,
             cases: tests
                 .into_iter()
@@ -4660,7 +4660,7 @@ mod tests {
                 })
                 .collect(),
             at: 0,
-        })]
+        }))]
     }
 
     fn has_switch_dispatch(sm: &GeneratorStateMachine) -> bool {

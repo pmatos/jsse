@@ -170,8 +170,8 @@ impl Interpreter {
         let ab_obj_id = self.create_object_id();
         {
             let mut ab = self.get_object_cell_expect(ab_obj_id).borrow_mut();
-            ab.class_name = "ArrayBuffer";
-            ab.prototype_id = self.realm().arraybuffer_prototype;
+            ab.set_class("ArrayBuffer");
+            ab.set_proto(self.realm().arraybuffer_prototype);
             ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(Box::new(
                 crate::interpreter::types::ArrayBufferData {
                     data: buf_rc.clone(),

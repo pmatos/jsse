@@ -57,6 +57,8 @@ impl<'a> Parser<'a> {
             return self.parse_yield_expression();
         }
 
+        self.escaped_yield_start()?;
+
         let left_start = self.current_token_start;
         let before = v8_position::snapshot();
         let left = self.parse_conditional_expression()?;
@@ -218,9 +220,8 @@ impl<'a> Parser<'a> {
                 if self.strict && matches!(&expr, Expression::Identifier(_, _)) {
                     return Err(self.error("Delete of an unqualified identifier in strict mode"));
                 }
-                if matches!(&expr, Expression::Member(_, MemberProperty::Private(_), _)) {
-                    return Err(self
-                        .error("Applying the 'delete' operator to a private name is not allowed"));
+                if let Expression::Member(_, MemberProperty::Private(name), _) = &expr {
+                    return Err(self.private_delete_error(name));
                 }
                 Ok(Expression::Delete(ExprBox::new(expr)))
             }
@@ -278,9 +279,7 @@ impl<'a> Parser<'a> {
                 if self.in_async || (self.is_module && self.in_function == 0) =>
             {
                 if self.in_formal_parameters {
-                    return Err(self.error(
-                        "Await expression is not allowed in formal parameters of an async function",
-                    ));
+                    return Err(self.await_in_params());
                 }
                 let at = CallSiteId::at(self.current_token_start).1;
                 v8_position::early_expression(at);
@@ -402,7 +401,7 @@ impl<'a> Parser<'a> {
                 Token::NoSubstitutionTemplate(_, _) | Token::TemplateHead(_, _) => {
                     v8_position::early_expression(v8_position::at(self.current_token_start));
                     let tmpl = self.parse_template_literal_expr(true)?;
-                    expr = Expression::TaggedTemplate(ExprBox::new(expr), tmpl);
+                    expr = Expression::TaggedTemplate(ExprBox::new(expr), Box::new(tmpl));
                 }
                 Token::OptionalChain => expr = self.parse_optional_chain(expr)?,
                 _ => break,
@@ -458,14 +457,13 @@ impl<'a> Parser<'a> {
                         )
                     };
                     let source_text = self.source_since(ident_start);
-                    return Ok(Expression::ArrowFunction(ArrowFunction {
-                        params: vec![Pattern::Identifier("yield".to_string())],
+                    return Ok(Expression::arrow(
+                        vec![Pattern::Identifier("yield".to_string())],
                         body,
-                        is_async: false,
+                        false,
                         source_text,
                         body_is_strict,
-                        info: Default::default(),
-                    }));
+                    ));
                 }
                 Ok(Expression::Identifier("yield".to_string(), 0))
             }
@@ -486,14 +484,13 @@ impl<'a> Parser<'a> {
                         )
                     };
                     let source_text = self.source_since(ident_start);
-                    return Ok(Expression::ArrowFunction(ArrowFunction {
-                        params: vec![Pattern::Identifier("await".to_string())],
+                    return Ok(Expression::arrow(
+                        vec![Pattern::Identifier("await".to_string())],
                         body,
-                        is_async: false,
+                        false,
                         source_text,
                         body_is_strict,
-                        info: Default::default(),
-                    }));
+                    ));
                 }
                 Ok(Expression::Identifier("await".to_string(), 0))
             }
@@ -512,14 +509,13 @@ impl<'a> Parser<'a> {
                         )
                     };
                     let source_text = self.source_since(ident_start);
-                    return Ok(Expression::ArrowFunction(ArrowFunction {
-                        params: vec![Pattern::Identifier("let".to_string())],
+                    return Ok(Expression::arrow(
+                        vec![Pattern::Identifier("let".to_string())],
                         body,
-                        is_async: false,
+                        false,
                         source_text,
                         body_is_strict,
-                        info: Default::default(),
-                    }));
+                    ));
                 }
                 Ok(Expression::Identifier("let".to_string(), 0))
             }
@@ -538,14 +534,13 @@ impl<'a> Parser<'a> {
                         )
                     };
                     let source_text = self.source_since(ident_start);
-                    return Ok(Expression::ArrowFunction(ArrowFunction {
-                        params: vec![Pattern::Identifier("static".to_string())],
+                    return Ok(Expression::arrow(
+                        vec![Pattern::Identifier("static".to_string())],
                         body,
-                        is_async: false,
+                        false,
                         source_text,
                         body_is_strict,
-                        info: Default::default(),
-                    }));
+                    ));
                 }
                 Ok(Expression::Identifier("static".to_string(), 0))
             }
@@ -647,14 +642,13 @@ impl<'a> Parser<'a> {
                     };
                     self.in_async = prev_async;
                     let source_text = self.source_since(source_start);
-                    return Ok(Expression::ArrowFunction(ArrowFunction {
-                        params: vec![Pattern::Identifier(name)],
+                    return Ok(Expression::arrow(
+                        vec![Pattern::Identifier(name)],
                         body,
-                        is_async: true,
+                        true,
                         source_text,
                         body_is_strict,
-                        info: Default::default(),
-                    }));
+                    ));
                 }
                 Ok(Expression::Identifier("async".to_string(), 0))
             }
@@ -680,14 +674,13 @@ impl<'a> Parser<'a> {
                         )
                     };
                     let source_text = self.source_since(ident_start);
-                    return Ok(Expression::ArrowFunction(ArrowFunction {
-                        params: vec![Pattern::Identifier(name)],
+                    return Ok(Expression::arrow(
+                        vec![Pattern::Identifier(name)],
                         body,
-                        is_async: false,
+                        false,
                         source_text,
                         body_is_strict,
-                        info: Default::default(),
-                    }));
+                    ));
                 }
                 Ok(Expression::Identifier(name, Self::ident_pos(ident_start)))
             }
@@ -696,15 +689,11 @@ impl<'a> Parser<'a> {
                 let ident_start = self.current_token_start;
                 // Escaped reserved words are still reserved
                 if Self::is_reserved_identifier(&name, self.strict) {
-                    return Err(
-                        self.error("Keyword must not contain escaped characters".to_string())
-                    );
+                    return Err(self.escaped_reserved_error(&name));
                 }
                 // Escaped "await" and "yield" cannot be used as identifiers
                 if name == "await" || name == "yield" {
-                    return Err(
-                        self.error("Keyword must not contain escaped characters".to_string())
-                    );
+                    return Err(self.escaped_reserved_error(&name));
                 }
                 self.check_strict_identifier(&name)?;
                 self.advance()?;
@@ -721,14 +710,13 @@ impl<'a> Parser<'a> {
                         )
                     };
                     let source_text = self.source_since(ident_start);
-                    return Ok(Expression::ArrowFunction(ArrowFunction {
-                        params: vec![Pattern::Identifier(name)],
+                    return Ok(Expression::arrow(
+                        vec![Pattern::Identifier(name)],
                         body,
-                        is_async: false,
+                        false,
                         source_text,
                         body_is_strict,
-                        info: Default::default(),
-                    }));
+                    ));
                 }
                 Ok(Expression::Identifier(name, Self::ident_pos(ident_start)))
             }
@@ -826,16 +814,15 @@ impl<'a> Parser<'a> {
                             )
                         };
                         let source_text = self.source_since(paren_start);
-                        return Ok(Expression::ArrowFunction(ArrowFunction {
-                            params: Vec::new(),
+                        return Ok(Expression::arrow(
+                            Vec::new(),
                             body,
-                            is_async: false,
+                            false,
                             source_text,
                             body_is_strict,
-                            info: Default::default(),
-                        }));
+                        ));
                     }
-                    return Err(self.error("Unexpected token )"));
+                    return Err(self.empty_parens_error());
                 }
                 // Check for rest param: (...a) =>
                 if self.current == Token::Ellipsis {
@@ -855,14 +842,13 @@ impl<'a> Parser<'a> {
                         )
                     };
                     let source_text = self.source_since(paren_start);
-                    return Ok(Expression::ArrowFunction(ArrowFunction {
+                    return Ok(Expression::arrow(
                         params,
                         body,
-                        is_async: false,
+                        false,
                         source_text,
                         body_is_strict,
-                        info: Default::default(),
-                    }));
+                    ));
                 }
                 let outer_cover = self.begin_cover_list();
                 let expr = self.parse_cover_element()?;
@@ -903,14 +889,13 @@ impl<'a> Parser<'a> {
                             )
                         };
                         let source_text = self.source_since(paren_start);
-                        return Ok(Expression::ArrowFunction(ArrowFunction {
+                        return Ok(Expression::arrow(
                             params,
                             body,
-                            is_async: false,
+                            false,
                             source_text,
                             body_is_strict,
-                            info: Default::default(),
-                        }));
+                        ));
                     }
                     if arrow_only {
                         return Err(self.arrow_only_error(&exprs));
@@ -960,7 +945,7 @@ impl<'a> Parser<'a> {
             }
             Token::NoSubstitutionTemplate(_, _) | Token::TemplateHead(_, _) => {
                 let tmpl = self.parse_template_literal_expr(false)?;
-                Ok(Expression::Template(tmpl))
+                Ok(Expression::Template(Box::new(tmpl)))
             }
             Token::Keyword(Keyword::Of) => {
                 self.advance()?;
@@ -1057,7 +1042,7 @@ impl<'a> Parser<'a> {
         Ok(Expression::Object(props, trailing_comma_after_spread))
     }
 
-    fn is_method_name_start(token: &Token) -> bool {
+    pub(super) fn is_method_name_start(token: &Token) -> bool {
         matches!(
             token,
             Token::Identifier(_)
@@ -1136,7 +1121,7 @@ impl<'a> Parser<'a> {
             let source_text = self.source_since(method_source_start);
             return Ok(Property {
                 key,
-                value: Expression::Function(FunctionExpr {
+                value: Expression::Function(Box::new(FunctionExpr {
                     name: None,
                     params,
                     body: Body::new(body),
@@ -1145,7 +1130,7 @@ impl<'a> Parser<'a> {
                     source_text,
                     body_is_strict: body_strict,
                     info: Default::default(),
-                }),
+                })),
                 kind: PropertyKind::Init,
                 computed,
                 shorthand: false,
@@ -1196,7 +1181,7 @@ impl<'a> Parser<'a> {
             let source_text = self.source_since(method_source_start);
             return Ok(Property {
                 key,
-                value: Expression::Function(FunctionExpr {
+                value: Expression::Function(Box::new(FunctionExpr {
                     name: None,
                     params,
                     body: Body::new(body),
@@ -1205,7 +1190,7 @@ impl<'a> Parser<'a> {
                     source_text,
                     body_is_strict: body_strict,
                     info: Default::default(),
-                }),
+                })),
                 kind: PropertyKind::Init,
                 computed,
                 shorthand: false,
@@ -1272,7 +1257,7 @@ impl<'a> Parser<'a> {
                 }
                 return Ok(Property {
                     key,
-                    value: Expression::Function(FunctionExpr {
+                    value: Expression::Function(Box::new(FunctionExpr {
                         name: None,
                         params,
                         body: Body::new(body),
@@ -1281,7 +1266,7 @@ impl<'a> Parser<'a> {
                         source_text: self.source_since(method_source_start),
                         body_is_strict: body_strict,
                         info: Default::default(),
-                    }),
+                    })),
                     kind: saved_kind,
                     computed,
                     shorthand: false,
@@ -1301,9 +1286,7 @@ impl<'a> Parser<'a> {
             return Err(self.error("Keyword must not contain escaped characters"));
         }
 
-        let is_escaped_reserved = matches!(&self.current, Token::IdentifierWithEscape(name)
-            if Self::is_reserved_identifier(name, self.strict)
-                || name == "await" || name == "yield");
+        let is_escaped_reserved = self.escaped_shorthand_reserved();
         let was_keyword = matches!(&self.current, Token::Keyword(_) | Token::BooleanLiteral(_))
             || self.current == Token::NullLiteral;
 
@@ -1321,11 +1304,11 @@ impl<'a> Parser<'a> {
             && self.current != Token::Assign
         {
             if is_escaped_reserved {
-                return Err(self.error("Keyword must not contain escaped characters"));
+                return Err(self.escaped_shorthand_error(name));
             }
             // Reserved words cannot be used as shorthand IdentifierReferences
             if matches!(name.as_str(), "true" | "false" | "null") {
-                return Err(self.error(format!("Unexpected token '{name}'")));
+                return Err(self.shorthand_keyword(name));
             }
             // Keywords that are not valid IdentifierReferences cannot be shorthand
             if was_keyword {
@@ -1339,7 +1322,7 @@ impl<'a> Parser<'a> {
                     "implements" | "interface" | "package" | "private" | "protected" | "public"
                 );
                 if !is_contextual && !is_strict_reserved {
-                    return Err(self.error(format!("Unexpected token '{n}'")));
+                    return Err(self.shorthand_keyword(n));
                 }
             }
             // await is not a shorthand IdentifierReference in static blocks, async, modules
@@ -1384,7 +1367,7 @@ impl<'a> Parser<'a> {
             && self.current == Token::Assign
         {
             if is_escaped_reserved {
-                return Err(self.error("Keyword must not contain escaped characters"));
+                return Err(self.escaped_shorthand_error(name));
             }
             // Keywords cannot be CoverInitializedName targets
             if was_keyword && Self::is_reserved_identifier(name, self.strict) {
@@ -1392,7 +1375,7 @@ impl<'a> Parser<'a> {
             }
             let ident = name.clone();
             if self.strict && (ident == "eval" || ident == "arguments") {
-                return Err(self.error("Invalid destructuring assignment target"));
+                return Err(self.cover_eval_error());
             }
             self.advance()?; // consume '='
             let default_value = self.parse_assignment_expression()?;
@@ -1437,7 +1420,7 @@ impl<'a> Parser<'a> {
             self.check_duplicate_params_strict(&params)?;
             return Ok(Property {
                 key,
-                value: Expression::Function(FunctionExpr {
+                value: Expression::Function(Box::new(FunctionExpr {
                     name: None,
                     params,
                     body: Body::new(body),
@@ -1446,7 +1429,7 @@ impl<'a> Parser<'a> {
                     source_text: self.source_since(method_source_start),
                     body_is_strict: body_strict,
                     info: Default::default(),
-                }),
+                })),
                 kind: PropertyKind::Init,
                 computed,
                 shorthand: false,
@@ -1512,7 +1495,7 @@ impl<'a> Parser<'a> {
             self.check_duplicate_params_strict(&params)?;
         }
         let source_text = self.source_since(source_start);
-        Ok(Expression::Function(FunctionExpr {
+        Ok(Expression::Function(Box::new(FunctionExpr {
             name,
             params,
             body: Body::new(body),
@@ -1521,7 +1504,7 @@ impl<'a> Parser<'a> {
             source_text,
             body_is_strict: body_strict,
             info: Default::default(),
-        }))
+        })))
     }
 
     fn parse_async_function_expression(
@@ -1564,7 +1547,7 @@ impl<'a> Parser<'a> {
         }
         self.check_duplicate_params_strict(&params)?;
         let source_text = self.source_since(source_start);
-        Ok(Expression::Function(FunctionExpr {
+        Ok(Expression::Function(Box::new(FunctionExpr {
             name,
             params,
             body: Body::new(body),
@@ -1573,7 +1556,7 @@ impl<'a> Parser<'a> {
             source_text,
             body_is_strict: body_strict,
             info: Default::default(),
-        }))
+        })))
     }
 
     fn parse_async_arrow_params(&mut self, source_start: usize) -> Result<Expression, ParseError> {
@@ -1597,14 +1580,13 @@ impl<'a> Parser<'a> {
                 };
                 self.in_async = prev_async;
                 let source_text = self.source_since(source_start);
-                return Ok(Expression::ArrowFunction(ArrowFunction {
-                    params: Vec::new(),
+                return Ok(Expression::arrow(
+                    Vec::new(),
                     body,
-                    is_async: true,
+                    true,
                     source_text,
                     body_is_strict,
-                    info: Default::default(),
-                }));
+                ));
             }
             // async() — function call on 'async' identifier
             return Ok(Expression::Call(
@@ -1636,14 +1618,13 @@ impl<'a> Parser<'a> {
             };
             self.in_async = prev_async;
             let source_text = self.source_since(source_start);
-            return Ok(Expression::ArrowFunction(ArrowFunction {
+            return Ok(Expression::arrow(
                 params,
                 body,
-                is_async: true,
+                true,
                 source_text,
                 body_is_strict,
-                info: Default::default(),
-            }));
+            ));
         }
         let outer_cover = self.begin_cover_list();
         let expr = self.parse_cover_element()?;
@@ -1681,14 +1662,13 @@ impl<'a> Parser<'a> {
                 };
                 self.in_async = prev_async;
                 let source_text = self.source_since(source_start);
-                return Ok(Expression::ArrowFunction(ArrowFunction {
+                return Ok(Expression::arrow(
                     params,
                     body,
-                    is_async: true,
+                    true,
                     source_text,
                     body_is_strict,
-                    info: Default::default(),
-                }));
+                ));
             }
             // Not an arrow — it's async(args) function call
             return Ok(Expression::Call(
@@ -1738,11 +1718,11 @@ impl<'a> Parser<'a> {
             Self::check_no_direct_super_in_constructor(&body)?;
         }
         let source_text = self.source_since(source_start);
-        Ok(Expression::Class(ClassExpr {
+        Ok(Expression::Class(Box::new(ClassExpr {
             name,
             super_class,
             body,
             source_text,
-        }))
+        })))
     }
 }

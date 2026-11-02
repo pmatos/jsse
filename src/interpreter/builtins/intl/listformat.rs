@@ -106,11 +106,11 @@ impl Interpreter {
         if let Some(op_id) = self.realm().object_prototype {
             self.get_object_cell_expect(proto_id)
                 .borrow_mut()
-                .prototype_id = Some(op_id);
+                .set_proto(Some(op_id));
         }
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Intl.ListFormat";
+            .set_class("Intl.ListFormat");
 
         // @@toStringTag
         self.define_to_string_tag(proto_id, "Intl.ListFormat");
@@ -175,7 +175,7 @@ impl Interpreter {
                             interp
                                 .get_object_cell_expect(part_obj_id)
                                 .borrow_mut()
-                                .prototype_id = Some(op_id);
+                                .set_proto(Some(op_id));
                         }
                         interp
                             .get_object_cell_expect(part_obj_id)
@@ -227,7 +227,7 @@ impl Interpreter {
                     interp
                         .get_object_cell_expect(result_id)
                         .borrow_mut()
-                        .prototype_id = Some(op_id);
+                        .set_proto(Some(op_id));
                 }
 
                 let props = vec![
@@ -325,11 +325,11 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .prototype_id = Some(proto);
+                    .set_proto(Some(proto));
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .class_name = "Intl.ListFormat";
+                    .set_class("Intl.ListFormat");
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind =
                     crate::interpreter::types::ObjectKind::Intl(Box::new(IntlData::ListFormat {
                         locale,

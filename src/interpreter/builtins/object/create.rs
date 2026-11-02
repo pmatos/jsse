@@ -16,12 +16,12 @@ pub(super) fn object_create(interp: &mut Interpreter, args: &[JsValue]) -> Compl
             interp
                 .get_object_cell_expect(new_obj_id)
                 .borrow_mut()
-                .prototype_id = Some(proto_id);
+                .set_proto(Some(proto_id));
         } else if proto_arg.is_null() {
             interp
                 .get_object_cell_expect(new_obj_id)
                 .borrow_mut()
-                .prototype_id = None;
+                .set_proto(None);
         } else {
             unreachable!()
         }

@@ -104,7 +104,7 @@ impl Interpreter {
         let mut next = matches!(until, Until::Constructor(_)).then_some(target);
         while let Some(id) = next.filter(|_| ancestors.len() < 64) {
             ancestors.push(id);
-            next = self.get_object(id).and_then(|o| o.borrow().prototype_id);
+            next = self.get_object(id).and_then(|o| o.borrow().proto_id());
         }
         ids.take_while(|id| ancestors.contains(id)).count()
     }
