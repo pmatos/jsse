@@ -127,7 +127,7 @@ fn cloned_handle_keeps_storage_alive_after_arena_drop() {
 #[test]
 fn prefetch_hints_follow_payload_kinds_and_leave_objects_intact() {
     use crate::interpreter::types::{
-        ArrayData, Completion, IteratorKind, IteratorState, JsFunction, ObjectKind,
+        Completion, IteratorKind, IteratorState, JsFunction, ObjectKind,
     };
     use crate::types::JsValue;
 
@@ -139,7 +139,7 @@ fn prefetch_hints_follow_payload_kinds_and_leave_objects_intact() {
         |_, _, _| Completion::Normal(JsValue::UNDEFINED),
     )));
     let mut array = JsObjectData::new();
-    array.kind = ObjectKind::Array(Box::new(ArrayData::default()));
+    array.kind = ObjectKind::Array(Box::default());
     let mut iterator = JsObjectData::new();
     iterator.set_iterator_state(IteratorState::ArrayIterator {
         array_id: 0,
