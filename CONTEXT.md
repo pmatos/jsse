@@ -277,39 +277,42 @@ rejection; `ta_number_getter` instead returns zero for detached/OOB views.
 Borrows end before `create_type_error` mutates the arena.
 _Avoid_: receiver check, brand check (for the whole prologue), this-unwrap.
 
+**Value Search**:
+`search`/`Search` (`builtins/array_search.rs`) own Array/TypedArray
+indexOf/lastIndexOf/includes: preparation, range, coercion, access, equality,
+results and roots. Index methods skip holes; includes reads them.
+_Avoid_: search cursor, equality strategy.
+
 **FindViaPredicate**:
-`FindMethod` in `builtins/find_via_predicate.rs` selects Array/TypedArray find
-operations. Two family entries own preparation, captured range, validation,
-callbacks, results and roots. Array visits holes; TypedArray checks live bounds.
+Array/TypedArray find (`builtins/find_via_predicate.rs`, `FindMethod`): family
+entries own preparation, range, validation, callbacks, results and roots.
+Array visits holes; TypedArray checks live bounds.
 _Avoid_: search cursor, predicate strategy.
 
 **Reduction**:
-`builtins/reduction.rs` owns Array/TypedArray reduce/reduceRight: preparation,
-captured range, seeds, callbacks and completions. Array skips holes; TypedArray
-checks live bounds. Each visit roots its accumulator before observable reads,
-releasing replaced accumulators.
+Array/TypedArray reduce/reduceRight (`builtins/reduction.rs`): preparation,
+range, seeds, callbacks, completions. Array skips holes; TypedArray checks live
+bounds. Visits root accumulators before reads and release replaced ones.
 _Avoid_: fold strategy, accumulator cursor.
 
 **Predicate Quantification**:
-Array/TypedArray some/every (`builtins/predicate_quantification.rs`): `quantify`
-and `Quantifier` own preparation, captured range, validation, callbacks,
-truthiness, short-circuit results and roots. Array skips holes; TypedArray checks
-live bounds. Input roots precede preparation; visit roots do not accumulate.
+Array/TypedArray some/every (`builtins/predicate_quantification.rs`,
+`quantify`/`Quantifier`): preparation, range, validation, callbacks, truthiness,
+results and roots. Array skips holes; TypedArray checks live bounds. Inputs are
+rooted before preparation; visit roots never accumulate.
 _Avoid_: predicate loop, quantifier strategy.
 
 **Array Transformation**:
-`transform`/`Transform` in `builtins/array_transform.rs` own Array/TypedArray
-map/filter: preparation, captured range, callbacks, species, writes and roots.
-Array skips holes and creates output before callbacks; TypedArray reads every
-index, deferring filter output until selection finishes.
+Array/TypedArray map/filter (`builtins/array_transform.rs`, `transform`/`Transform`):
+preparation, range, callbacks, species, writes and roots. Array skips holes and
+creates output before callbacks; TypedArray reads every index, deferring filter
+output until selection finishes.
 _Avoid_: transform cursor, species builder protocol.
 
 **Close-on-Reject**:
-An iterator helper's argument-validation failure: `require_callable_arg`
-(`builtins/iterators.rs`) builds the error, closes the borrowed iterator
-(`IfAbruptCloseIterator`), then throws the original error even if close fails.
-It serves eight callable-argument helpers. Construct the error **before** close
-(user `return()` can rebind `TypeError`), and GC-root it **across** close (the
-collector cannot see Rust locals). This differs from a Receiver Guard: only 9
-of 14 helpers check `this`, which supplies no iterator to close.
+`require_callable_arg` (`builtins/iterators.rs`) serves eight helpers: build and
+GC-root the argument error before closing the borrowed iterator
+(`IfAbruptCloseIterator`), then throw it even if close fails. A user `return()`
+can rebind `TypeError`; Rust locals are invisible to GC. Unlike a Receiver Guard
+(9 of 14 helpers), this has an iterator to close.
 _Avoid_: close-and-throw, argument check, iterator preamble.

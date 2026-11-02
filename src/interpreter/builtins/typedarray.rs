@@ -1,4 +1,5 @@
 use super::super::*;
+use super::array_search::{self, Search};
 use super::array_transform::{self, Transform};
 use super::find_via_predicate::FindMethod;
 use super::node_host_buffer_errors::BufferRange;
@@ -1849,39 +1850,7 @@ impl Interpreter {
             "indexOf".to_string(),
             1,
             |interp, this_val, args| {
-                let ta = match validate_typed_array(interp, this_val) {
-                    Ok(ta) => ta,
-                    Err(c) => return c,
-                };
-                let len = typed_array_length(&ta) as i64;
-                if len == 0 {
-                    return Completion::Normal(JsValue::number(-1.0));
-                }
-                let search = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                let from = if args.len() > 1 {
-                    (match interp.to_integer_or_infinity_value(&args[1]) {
-                        Ok(n) => n,
-                        Err(e) => return Completion::Throw(e),
-                    }) as i64
-                } else {
-                    0
-                };
-                let start = if from < 0 {
-                    (len + from).max(0) as usize
-                } else {
-                    from as usize
-                };
-                for i in start..len as usize {
-                    // indexOf uses HasProperty semantics: skip elements that are not valid
-                    if !is_valid_integer_index(&ta, i as f64) {
-                        continue;
-                    }
-                    let elem = typed_array_get_index(&ta, i);
-                    if strict_eq(&elem, &search) {
-                        return Completion::Normal(JsValue::number(i as f64));
-                    }
-                }
-                Completion::Normal(JsValue::number(-1.0))
+                array_search::search(interp, Search::TypedArrayIndexOf, this_val, args)
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -1893,40 +1862,7 @@ impl Interpreter {
             "lastIndexOf".to_string(),
             1,
             |interp, this_val, args| {
-                let ta = match validate_typed_array(interp, this_val) {
-                    Ok(ta) => ta,
-                    Err(c) => return c,
-                };
-                let len = typed_array_length(&ta) as i64;
-                if len == 0 {
-                    return Completion::Normal(JsValue::number(-1.0));
-                }
-                let search = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                let from = if args.len() > 1 {
-                    (match interp.to_integer_or_infinity_value(&args[1]) {
-                        Ok(n) => n,
-                        Err(e) => return Completion::Throw(e),
-                    }) as i64
-                } else {
-                    len - 1
-                };
-                let start = if from < 0 {
-                    (len + from).max(-1)
-                } else {
-                    from.min(len - 1)
-                };
-                let mut i = start;
-                while i >= 0 {
-                    // lastIndexOf uses HasProperty semantics: skip elements that are not valid
-                    if is_valid_integer_index(&ta, i as f64) {
-                        let elem = typed_array_get_index(&ta, i as usize);
-                        if strict_eq(&elem, &search) {
-                            return Completion::Normal(JsValue::number(i as f64));
-                        }
-                    }
-                    i -= 1;
-                }
-                Completion::Normal(JsValue::number(-1.0))
+                array_search::search(interp, Search::TypedArrayLastIndexOf, this_val, args)
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -1938,35 +1874,7 @@ impl Interpreter {
             "includes".to_string(),
             1,
             |interp, this_val, args| {
-                let ta = match validate_typed_array(interp, this_val) {
-                    Ok(ta) => ta,
-                    Err(c) => return c,
-                };
-                let len = typed_array_length(&ta) as i64;
-                if len == 0 {
-                    return Completion::Normal(JsValue::boolean(false));
-                }
-                let search = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                let from = if args.len() > 1 {
-                    (match interp.to_integer_or_infinity_value(&args[1]) {
-                        Ok(n) => n,
-                        Err(e) => return Completion::Throw(e),
-                    }) as i64
-                } else {
-                    0
-                };
-                let start = if from < 0 {
-                    (len + from).max(0) as usize
-                } else {
-                    from as usize
-                };
-                for i in start..len as usize {
-                    let elem = typed_array_get_index(&ta, i);
-                    if same_value_zero(&elem, &search) {
-                        return Completion::Normal(JsValue::boolean(true));
-                    }
-                }
-                Completion::Normal(JsValue::boolean(false))
+                array_search::search(interp, Search::TypedArrayIncludes, this_val, args)
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -4721,38 +4629,6 @@ pub(crate) fn dv_f64_to_f16_bits(val: f64) -> u16 {
 
 fn is_bigint_kind(kind: TypedArrayKind) -> bool {
     matches!(kind, TypedArrayKind::BigInt64 | TypedArrayKind::BigUint64)
-}
-
-fn same_value_zero(x: &JsValue, y: &JsValue) -> bool {
-    match (x.as_number(), y.as_number()) {
-        (Some(a), Some(b)) => {
-            if a.is_nan() && b.is_nan() {
-                return true;
-            }
-            if a == 0.0 && b == 0.0 {
-                return true;
-            }
-            a == b
-        }
-        _ => strict_eq(x, y),
-    }
-}
-
-fn strict_eq(x: &JsValue, y: &JsValue) -> bool {
-    if x.kind() != y.kind() {
-        return false;
-    }
-    match x.kind() {
-        ValueKind::Undefined | ValueKind::Null => true,
-        ValueKind::Boolean => x.as_boolean() == y.as_boolean(),
-        ValueKind::Number => x.as_number() == y.as_number(),
-        ValueKind::String => {
-            x.as_string().map(|s| s.to_rust_string()) == y.as_string().map(|s| s.to_rust_string())
-        }
-        ValueKind::BigInt => x.as_bigint().map(|b| b.value) == y.as_bigint().map(|b| b.value),
-        ValueKind::Object => x.as_object_id() == y.as_object_id(),
-        _ => false,
-    }
 }
 
 /// Spec ValidateTypedArray(this, accessMode=~read~): the receiver-validation
