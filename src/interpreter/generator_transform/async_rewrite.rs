@@ -37,7 +37,7 @@ fn rewrite_stmt_await_to_yield(stmt: &Statement) -> Statement {
                 })
                 .collect(),
         }),
-        Statement::If(if_stmt) => Statement::If(IfStatement {
+        Statement::If(if_stmt) => Statement::If(Box::new(IfStatement {
             test: rewrite_expr(&if_stmt.test),
             consequent: Box::new(rewrite_stmt_await_to_yield(&if_stmt.consequent)),
             alternate: if_stmt
@@ -45,16 +45,16 @@ fn rewrite_stmt_await_to_yield(stmt: &Statement) -> Statement {
                 .as_ref()
                 .map(|s| Box::new(rewrite_stmt_await_to_yield(s))),
             at: if_stmt.at,
-        }),
-        Statement::While(w) => Statement::While(WhileStatement {
+        })),
+        Statement::While(w) => Statement::While(Box::new(WhileStatement {
             test: rewrite_expr(&w.test),
             body: Box::new(rewrite_stmt_await_to_yield(&w.body)),
-        }),
-        Statement::DoWhile(d) => Statement::DoWhile(DoWhileStatement {
+        })),
+        Statement::DoWhile(d) => Statement::DoWhile(Box::new(DoWhileStatement {
             test: rewrite_expr(&d.test),
             body: Box::new(rewrite_stmt_await_to_yield(&d.body)),
-        }),
-        Statement::For(f) => Statement::For(ForStatement {
+        })),
+        Statement::For(f) => Statement::For(Box::new(ForStatement {
             init: f.init.as_ref().map(|i| match i {
                 ForInit::Variable(v) => ForInit::Variable(VariableDeclaration {
                     kind: v.kind,
@@ -74,14 +74,14 @@ fn rewrite_stmt_await_to_yield(stmt: &Statement) -> Statement {
             update: f.update.as_deref().map(|e| ExprBox::new(rewrite_expr(e))),
             body: Box::new(rewrite_stmt_await_to_yield(&f.body)),
             scope_capture: Default::default(),
-        }),
-        Statement::ForIn(f) => Statement::ForIn(ForInStatement {
+        })),
+        Statement::ForIn(f) => Statement::ForIn(Box::new(ForInStatement {
             left: rewrite_for_left(&f.left),
             right: rewrite_expr(&f.right),
             body: Box::new(rewrite_stmt_await_to_yield(&f.body)),
             scope_capture: Default::default(),
-        }),
-        Statement::ForOf(f) => Statement::ForOf(ForOfStatement {
+        })),
+        Statement::ForOf(f) => Statement::ForOf(Box::new(ForOfStatement {
             left: rewrite_for_left(&f.left),
             right: rewrite_expr(&f.right),
             body: Box::new(rewrite_stmt_await_to_yield(&f.body)),
@@ -89,10 +89,10 @@ fn rewrite_stmt_await_to_yield(stmt: &Statement) -> Statement {
             at: f.at,
             right_at: f.right_at,
             scope_capture: Default::default(),
-        }),
+        })),
         Statement::Return(e, at) => Statement::Return(e.as_ref().map(rewrite_expr), *at),
         Statement::Throw(e, p) => Statement::Throw(rewrite_expr(e), *p),
-        Statement::Try(t) => Statement::Try(TryStatement {
+        Statement::Try(t) => Statement::Try(Box::new(TryStatement {
             block: rewrite_stmts_await_to_yield(&t.block),
             handler: t.handler.as_ref().map(|h| CatchClause {
                 param: h.param.clone(),
@@ -102,8 +102,8 @@ fn rewrite_stmt_await_to_yield(stmt: &Statement) -> Statement {
                 .finalizer
                 .as_ref()
                 .map(|f| rewrite_stmts_await_to_yield(f)),
-        }),
-        Statement::Switch(s) => Statement::Switch(SwitchStatement {
+        })),
+        Statement::Switch(s) => Statement::Switch(Box::new(SwitchStatement {
             discriminant: rewrite_expr(&s.discriminant),
             cases: s
                 .cases
@@ -114,7 +114,7 @@ fn rewrite_stmt_await_to_yield(stmt: &Statement) -> Statement {
                 })
                 .collect(),
             at: s.at,
-        }),
+        })),
         Statement::Labeled(label, inner) => {
             Statement::Labeled(label.clone(), Box::new(rewrite_stmt_await_to_yield(inner)))
         }
@@ -247,21 +247,21 @@ fn rewrite_expr(expr: &Expression) -> Expression {
         ),
         Expression::TaggedTemplate(tag, tl) => Expression::TaggedTemplate(
             ExprBox::new(rewrite_expr(tag)),
-            TemplateLiteral {
+            Box::new(TemplateLiteral {
                 id: tl.id,
                 quasis: tl.quasis.clone(),
                 raw_quasis: tl.raw_quasis.clone(),
                 raw_stand_ins: tl.raw_stand_ins,
                 expressions: tl.expressions.iter().map(rewrite_expr).collect(),
-            },
+            }),
         ),
-        Expression::Template(tl) => Expression::Template(TemplateLiteral {
+        Expression::Template(tl) => Expression::Template(Box::new(TemplateLiteral {
             id: tl.id,
             quasis: tl.quasis.clone(),
             raw_quasis: tl.raw_quasis.clone(),
             raw_stand_ins: tl.raw_stand_ins,
             expressions: tl.expressions.iter().map(rewrite_expr).collect(),
-        }),
+        })),
         Expression::Typeof(e) => Expression::Typeof(ExprBox::new(rewrite_expr(e))),
         Expression::Void(e) => Expression::Void(ExprBox::new(rewrite_expr(e))),
         Expression::Delete(e) => Expression::Delete(ExprBox::new(rewrite_expr(e))),

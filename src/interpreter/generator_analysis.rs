@@ -679,8 +679,7 @@ fn collect_pattern_vars(
 /// member-expression targets, and default (`Initializer`) values -- feeding
 /// each to `analyze_expression` so a `yield` reachable only through a pattern
 /// (e.g. `var { a = yield 1 } = {}`) still registers a `YieldPoint`.
-/// `collect_pattern_vars` only gathers bound names and deliberately ignores
-/// these expressions, so this walk is a separate pass over the same pattern.
+/// `collect_pattern_vars` only gathers bound names, so this is a separate pass.
 fn analyze_pattern_expressions(
     pattern: &Pattern,
     analysis: &mut GeneratorAnalysis,
@@ -1044,8 +1043,7 @@ pub(crate) fn pattern_needs_lowering(pattern: &Pattern) -> bool {
 /// True for a destructuring-assignment pattern (`{..} = ..` or `[..] = ..`)
 /// whose suspensions the transform lowers into states (see
 /// `lower_pattern_assignment`, `lower_array_pattern_assignment`). Unlike the
-/// declaration form, a member-expression target (`o[await k]`) is supported: assignment can
-/// target one, a declaration cannot.
+/// declaration form, a member-expression target (`o[await k]`) is supported.
 pub(crate) fn pattern_needs_assignment_lowering(pattern: &Pattern) -> bool {
     pattern_contains_suspension(pattern)
         && pattern_lowering_supported(pattern, PatternLoweringForm::Assignment)
@@ -1079,13 +1077,13 @@ pub(crate) fn disposing_for_head_scope(
     if !f.has_using_head() {
         return None;
     }
-    let inner_loop = Statement::For(ForStatement {
+    let inner_loop = Statement::For(Box::new(ForStatement {
         init: None,
         test: f.test.clone(),
         update: f.update.clone(),
         body: f.body.clone(),
         scope_capture: Default::default(),
-    });
+    }));
     let labeled_loop = labels.iter().rev().fold(inner_loop, |stmt, label| {
         Statement::Labeled(label.clone(), Box::new(stmt))
     });
@@ -1513,23 +1511,23 @@ mod tests {
             declarations: vec![VariableDeclarator {
                 init_at: 0,
                 pattern: Pattern::Identifier("C".to_string()),
-                init: Some(Expression::Class(ClassExpr {
+                init: Some(Expression::Class(Box::new(ClassExpr {
                     name: None,
                     super_class: super_class.map(Box::new),
                     body,
                     source_text: None,
-                })),
+                }))),
             }],
         })
     }
 
     fn class_decl(super_class: Option<Expression>, body: Vec<ClassElement>) -> Statement {
-        Statement::ClassDeclaration(ClassDecl {
+        Statement::ClassDeclaration(Box::new(ClassDecl {
             name: "C".to_string(),
             super_class: super_class.map(Box::new),
             body,
             source_text: None,
-        })
+        }))
     }
 
     fn computed_method(key: Expression) -> ClassElement {
@@ -1722,11 +1720,11 @@ mod tests {
 
     #[test]
     fn test_yield_in_try() {
-        let body = vec![Statement::Try(TryStatement {
+        let body = vec![Statement::Try(Box::new(TryStatement {
             block: vec![Statement::Expression(make_yield(false), 0)],
             handler: None,
             finalizer: Some(vec![]),
-        })];
+        }))];
         let analysis = analyze_generator_body(&body, &[]);
 
         assert_eq!(analysis.yield_points.len(), 1);
@@ -1739,10 +1737,10 @@ mod tests {
 
     #[test]
     fn test_yield_in_loop() {
-        let body = vec![Statement::While(WhileStatement {
+        let body = vec![Statement::While(Box::new(WhileStatement {
             test: Expression::Literal(Literal::Boolean(true)),
             body: Box::new(Statement::Expression(make_yield(false), 0)),
-        })];
+        }))];
         let analysis = analyze_generator_body(&body, &[]);
 
         assert_eq!(analysis.yield_points.len(), 1);
@@ -1788,17 +1786,17 @@ mod tests {
 
     #[test]
     fn test_nested_try_loop() {
-        let body = vec![Statement::Try(TryStatement {
-            block: vec![Statement::While(WhileStatement {
+        let body = vec![Statement::Try(Box::new(TryStatement {
+            block: vec![Statement::While(Box::new(WhileStatement {
                 test: Expression::Literal(Literal::Boolean(true)),
                 body: Box::new(Statement::Expression(make_yield(false), 0)),
-            })],
+            }))],
             handler: Some(CatchClause {
                 param: Some(Pattern::Identifier("e".to_string())),
                 body: vec![],
             }),
             finalizer: None,
-        })];
+        }))];
         let analysis = analyze_generator_body(&body, &[]);
 
         assert_eq!(analysis.yield_points.len(), 1);
@@ -1851,19 +1849,19 @@ mod tests {
         assert!(expr_contains(&make_await(), SuspensionTarget::Await));
         assert!(!expr_contains(&make_await(), SuspensionTarget::Yield));
 
-        let class = Expression::Class(ClassExpr {
+        let class = Expression::Class(Box::new(ClassExpr {
             name: None,
             super_class: Some(Box::new(make_await())),
             body: vec![computed_method(make_yield(false))],
             source_text: None,
-        });
+        }));
         assert!(expr_contains(&class, SuspensionTarget::Yield));
         assert!(expr_contains(&class, SuspensionTarget::Await));
         assert!(expr_contains(&class, SuspensionTarget::Either));
 
         let mut nested = make_function_expr();
         nested.body = Body::new(vec![Statement::Expression(make_await(), 0)]);
-        let function = Expression::Function(nested);
+        let function = Expression::Function(Box::new(nested));
         assert!(!expr_contains(&function, SuspensionTarget::Either));
     }
 
@@ -1922,12 +1920,12 @@ mod tests {
 
     #[test]
     fn test_yield_in_nested_class_expression_heritage() {
-        let inner = Expression::Class(ClassExpr {
+        let inner = Expression::Class(Box::new(ClassExpr {
             name: None,
             super_class: Some(Box::new(make_yield(false))),
             body: vec![],
             source_text: None,
-        });
+        }));
         let body = vec![class_decl(Some(inner), vec![])];
         let analysis = analyze_generator_body(&body, &[]);
 

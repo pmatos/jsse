@@ -57,5 +57,5 @@ fn only_a_hooked_thread_records_binary_positions() {
 #[cfg(target_pointer_width = "64")]
 #[test]
 fn the_operator_offset_does_not_grow_expression() {
-    assert_eq!(std::mem::size_of::<crate::ast::Expression>(), 112);
+    assert_eq!(std::mem::size_of::<crate::ast::Expression>(), 56);
 }

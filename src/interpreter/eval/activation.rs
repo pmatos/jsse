@@ -377,7 +377,7 @@ mod tests {
                     .get_object_cell(error.as_object_id().unwrap())
                     .unwrap()
                     .borrow()
-                    .prototype_id,
+                    .proto_id(),
                 interp.realms[realm].type_error_prototype
             );
         }

@@ -18,7 +18,7 @@ fn object_ids<'a>(values: impl IntoIterator<Item = &'a JsValue>) -> impl Iterato
 
 /// The nursery as a bitmap indexed by object id, filled at the start of each
 /// minor collection and cleared (in O(nursery)) at its end, so the buffers
-/// persist across collections. Scanning a large remembered Array then asks one
+/// persist across collections. Scanning a large remembered Array asks one
 /// cache-resident bit per element whether it references a young object,
 /// instead of loading each referent's header.
 #[derive(Default)]
@@ -1090,7 +1090,7 @@ impl Interpreter {
         seen_envs: &mut EnvVisits,
         bulk: bool,
     ) {
-        if let Some(pid) = obj.prototype_id {
+        if let Some(pid) = obj.proto_id() {
             worklist.push(pid);
         }
         for desc in obj.properties.values() {
@@ -1109,7 +1109,7 @@ impl Interpreter {
                 Self::collect_value_roots(v, worklist);
             }
         }
-        if let Some(ref v) = obj.primitive_value {
+        if let Some(v) = obj.primitive_value() {
             Self::collect_value_roots(v, worklist);
         }
         for elem in obj.private_field_values() {
@@ -1188,7 +1188,7 @@ impl Interpreter {
             ObjectKind::WrappedFunction(w) => {
                 worklist.push(w.target_id);
             }
-            ObjectKind::IterHelper(h) => match h {
+            ObjectKind::IterHelper(h) => match &**h {
                 IterHelperData::Delegation { iter, next } => {
                     Self::collect_value_roots(iter, worklist);
                     Self::collect_value_roots(next, worklist);
@@ -1492,7 +1492,7 @@ mod tests {
     #[test]
     fn trace_object_fields_roots_prototype_and_data_properties() {
         let mut data = JsObjectData::new();
-        data.prototype_id = Some(7);
+        data.set_proto(Some(7));
         data.properties.insert(
             "x".into(),
             PropertyDescriptor::data(obj(8), true, true, true),
@@ -1534,14 +1534,14 @@ mod tests {
     #[test]
     fn trace_object_fields_roots_disposable_stack_resources() {
         let mut data = JsObjectData::new();
-        data.kind = ObjectKind::DisposableStack(DisposableStackData {
+        data.kind = ObjectKind::DisposableStack(Box::new(DisposableStackData {
             stack: vec![DisposableResource {
                 value: obj(30),
                 hint: DisposeHint::Sync,
                 dispose_method: obj(31),
             }],
             disposed: false,
-        });
+        }));
 
         let mut worklist = Vec::new();
         Interpreter::trace_object_fields(&data, &mut worklist, &mut EnvVisits::new(false));
@@ -1841,7 +1841,7 @@ mod tests {
         tenure_initial_heap(&mut interp);
 
         let mut weak_map_data = JsObjectData::new();
-        weak_map_data.class_name = "WeakMap";
+        weak_map_data.set_class("WeakMap");
         weak_map_data.kind = ObjectKind::Map(Box::default());
         let weak_map = interp.alloc_object(weak_map_data);
         interp.gc_root_id(weak_map);
@@ -1886,7 +1886,7 @@ mod tests {
         tenure_initial_heap(&mut interp);
 
         let mut weak_set_data = JsObjectData::new();
-        weak_set_data.class_name = "WeakSet";
+        weak_set_data.set_class("WeakSet");
         weak_set_data.kind = ObjectKind::Set(Box::default());
         let weak_set = interp.alloc_object(weak_set_data);
         interp.gc_root_id(weak_set);
@@ -2461,7 +2461,7 @@ mod tests {
     /// collection has put into card tracking with every card clean.
     fn tenured_map(interp: &mut Interpreter, cards: usize) -> u64 {
         let mut data = JsObjectData::new();
-        data.class_name = "Map";
+        data.set_class("Map");
         let mut entries = KeyedEntries::default();
         for i in 0..cards * CARD_ELEMENTS {
             entries.upsert((JsValue::number(i as f64), JsValue::number(0.0)), |_, _| {});
@@ -2477,7 +2477,7 @@ mod tests {
 
     fn tenured_set(interp: &mut Interpreter, cards: usize) -> u64 {
         let mut data = JsObjectData::new();
-        data.class_name = "Set";
+        data.set_class("Set");
         let mut entries = KeyedEntries::default();
         for i in 0..cards * CARD_ELEMENTS {
             entries.upsert(JsValue::number(i as f64), |_, _| {});
@@ -2654,7 +2654,7 @@ mod tests {
         let mut interp = Interpreter::new();
         tenure_initial_heap(&mut interp);
         let mut data = JsObjectData::new();
-        data.class_name = "Map";
+        data.set_class("Map");
         data.kind = ObjectKind::Map(Box::default());
         let map = interp.alloc_object(data);
         interp.gc_root_id(map);

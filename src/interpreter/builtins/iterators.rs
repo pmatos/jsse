@@ -299,7 +299,7 @@ fn zip_keyed_next_inner(interp: &mut Interpreter, state: &ZipKeyedState) -> Comp
     interp
         .get_object_cell_expect(result_obj_id)
         .borrow_mut()
-        .prototype_id = None;
+        .set_proto(None);
     for (key, val) in &values {
         interp
             .get_object_cell_expect(result_obj_id)
@@ -556,7 +556,7 @@ impl Interpreter {
         let iter_proto_id = self.create_object_id();
         self.get_object_cell_expect(iter_proto_id)
             .borrow_mut()
-            .class_name = "Iterator";
+            .set_class("Iterator");
 
         // %IteratorPrototype%[@@iterator]() returns this
         let iter_self_fn = self.create_function(JsFunction::native(
@@ -711,7 +711,7 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
                     if let Some(p) = proto {
-                        obj.borrow_mut().prototype_id = Some(p);
+                        obj.borrow_mut().set_proto(Some(p));
                     }
                 }
                 Completion::Normal(this.clone())
@@ -823,10 +823,10 @@ impl Interpreter {
         let arr_iter_proto_id = self.create_object_id();
         self.get_object_cell_expect(arr_iter_proto_id)
             .borrow_mut()
-            .prototype_id = Some(iter_proto_id);
+            .set_proto(Some(iter_proto_id));
         self.get_object_cell_expect(arr_iter_proto_id)
             .borrow_mut()
-            .class_name = "Array Iterator";
+            .set_class("Array Iterator");
 
         let array_next = self.define_method(arr_iter_proto_id, "next", 0, |interp, this, _args| {
             let Some(this_id) = this.as_object_id() else {
@@ -846,10 +846,10 @@ impl Interpreter {
         let str_iter_proto_id = self.create_object_id();
         self.get_object_cell_expect(str_iter_proto_id)
             .borrow_mut()
-            .prototype_id = Some(iter_proto_id);
+            .set_proto(Some(iter_proto_id));
         self.get_object_cell_expect(str_iter_proto_id)
             .borrow_mut()
-            .class_name = "String Iterator";
+            .set_class("String Iterator");
 
         let string_next =
             self.define_method(str_iter_proto_id, "next", 0, |interp, this, _args| {
@@ -893,10 +893,10 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .prototype_id = self.realm().iterator_prototype;
+            .set_proto(self.realm().iterator_prototype);
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Iterator Helper";
+            .set_class("Iterator Helper");
 
         // next() — reads next + gen_state from this object's IterHelperData::Helper
         self.define_method(proto_id, "next", 0, |interp, this, args| {
@@ -1033,17 +1033,19 @@ impl Interpreter {
         let obj_id = self.create_object_id();
         self.get_object_cell_expect(obj_id)
             .borrow_mut()
-            .prototype_id = self.realm().iterator_helper_prototype;
-        self.get_object_cell_expect(obj_id).borrow_mut().class_name = "Iterator Helper";
+            .set_proto(self.realm().iterator_helper_prototype);
+        self.get_object_cell_expect(obj_id)
+            .borrow_mut()
+            .set_class("Iterator Helper");
         {
             let mut obj = self.get_object_cell_expect(obj_id).borrow_mut();
-            obj.kind = crate::interpreter::types::ObjectKind::IterHelper(
+            obj.kind = crate::interpreter::types::ObjectKind::IterHelper(Box::new(
                 crate::interpreter::types::IterHelperData::Helper {
                     next: next_fn.clone(),
                     return_closure: return_fn.clone(),
                     gen_state: state,
                 },
-            );
+            ));
             obj.gc_native_roots_mut().extend([next_fn, return_fn]);
         }
 
@@ -2455,7 +2457,7 @@ impl Interpreter {
         let wrap_valid_proto_id = self.create_object_id();
         self.get_object_cell_expect(wrap_valid_proto_id)
             .borrow_mut()
-            .prototype_id = self.realm().iterator_prototype;
+            .set_proto(self.realm().iterator_prototype);
 
         wrap_valid::define_wrap_valid_methods(self, wrap_valid_proto_id);
 
@@ -3213,12 +3215,13 @@ impl Interpreter {
 
     pub(crate) fn create_array_iterator(&mut self, array_id: u64, kind: IteratorKind) -> JsValue {
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype_id = self
-            .realm()
-            .array_iterator_prototype
-            .or(self.realm().iterator_prototype)
-            .or(self.realm().object_prototype);
-        obj_data.class_name = "Array Iterator";
+        obj_data.set_proto(
+            self.realm()
+                .array_iterator_prototype
+                .or(self.realm().iterator_prototype)
+                .or(self.realm().object_prototype),
+        );
+        obj_data.set_class("Array Iterator");
         obj_data.set_iterator_state(IteratorState::ArrayIterator {
             array_id,
             index: 0,
@@ -3307,8 +3310,8 @@ impl Interpreter {
             (Some(id), keys?)
         };
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype_id = self.realm().for_in_iterator_prototype;
-        obj_data.class_name = "For-In Iterator";
+        obj_data.set_proto(self.realm().for_in_iterator_prototype);
+        obj_data.set_class("For-In Iterator");
         obj_data.set_iterator_state(IteratorState::ForInEnumerator {
             obj_id,
             keys,
@@ -3323,12 +3326,13 @@ impl Interpreter {
         kind: IteratorKind,
     ) -> JsValue {
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype_id = self
-            .realm()
-            .array_iterator_prototype
-            .or(self.realm().iterator_prototype)
-            .or(self.realm().object_prototype);
-        obj_data.class_name = "Array Iterator";
+        obj_data.set_proto(
+            self.realm()
+                .array_iterator_prototype
+                .or(self.realm().iterator_prototype)
+                .or(self.realm().object_prototype),
+        );
+        obj_data.set_class("Array Iterator");
         obj_data.set_iterator_state(IteratorState::TypedArrayIterator {
             typed_array_id,
             index: 0,
@@ -3341,12 +3345,13 @@ impl Interpreter {
 
     pub(crate) fn create_string_iterator(&mut self, string: JsString) -> JsValue {
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype_id = self
-            .realm()
-            .string_iterator_prototype
-            .or(self.realm().iterator_prototype)
-            .or(self.realm().object_prototype);
-        obj_data.class_name = "String Iterator";
+        obj_data.set_proto(
+            self.realm()
+                .string_iterator_prototype
+                .or(self.realm().iterator_prototype)
+                .or(self.realm().object_prototype),
+        );
+        obj_data.set_class("String Iterator");
         obj_data.set_iterator_state(IteratorState::StringIterator {
             string,
             position: 0,
@@ -3360,10 +3365,10 @@ impl Interpreter {
         let gen_proto_id = self.create_object_id();
         self.get_object_cell_expect(gen_proto_id)
             .borrow_mut()
-            .class_name = "Generator";
+            .set_class("Generator");
         self.get_object_cell_expect(gen_proto_id)
             .borrow_mut()
-            .prototype_id = self.realm().iterator_prototype;
+            .set_proto(self.realm().iterator_prototype);
 
         // next(value)
         let next_fn = self.create_function(JsFunction::native(
@@ -3439,7 +3444,7 @@ impl Interpreter {
         let gf_proto_id = self.create_object_id();
         self.get_object_cell_expect(gf_proto_id)
             .borrow_mut()
-            .class_name = "GeneratorFunction";
+            .set_class("GeneratorFunction");
 
         // [[Prototype]] = Function.prototype_id
         // Get Function.prototype from global Function
@@ -3451,7 +3456,7 @@ impl Interpreter {
         {
             self.get_object_cell_expect(gf_proto_id)
                 .borrow_mut()
-                .prototype_id = Some(func_proto.borrow().id.unwrap());
+                .set_proto(Some(func_proto.id()));
         }
 
         // GeneratorFunction.prototype.prototype_id = Generator.prototype_id
@@ -3481,7 +3486,7 @@ impl Interpreter {
         let async_iter_proto_id = self.create_object_id();
         self.get_object_cell_expect(async_iter_proto_id)
             .borrow_mut()
-            .class_name = "AsyncIterator";
+            .set_class("AsyncIterator");
 
         let async_iter_self_fn = self.create_function(JsFunction::native(
             "[Symbol.asyncIterator]".to_string(),
@@ -3663,10 +3668,10 @@ impl Interpreter {
         let gen_proto_id = self.create_object_id();
         self.get_object_cell_expect(gen_proto_id)
             .borrow_mut()
-            .prototype_id = Some(async_iter_proto_id);
+            .set_proto(Some(async_iter_proto_id));
         self.get_object_cell_expect(gen_proto_id)
             .borrow_mut()
-            .class_name = "AsyncGenerator";
+            .set_class("AsyncGenerator");
 
         // next(value)
         let next_fn = self.create_function(JsFunction::native(
@@ -3725,7 +3730,7 @@ impl Interpreter {
         let agf_proto_id = self.create_object_id();
         self.get_object_cell_expect(agf_proto_id)
             .borrow_mut()
-            .class_name = "AsyncGeneratorFunction";
+            .set_class("AsyncGeneratorFunction");
         // prototype property points to AsyncGenerator.prototype_id
         self.get_object_cell_expect(agf_proto_id)
             .borrow_mut()
@@ -3753,7 +3758,7 @@ impl Interpreter {
 
     pub(crate) fn create_iter_result_object(&mut self, value: JsValue, done: bool) -> JsValue {
         let mut data = JsObjectData::new();
-        data.prototype_id = self.realm().object_prototype;
+        data.set_proto(self.realm().object_prototype);
         data.properties.reserve(2);
         data.push_fresh_property(
             &self.common_keys.value,

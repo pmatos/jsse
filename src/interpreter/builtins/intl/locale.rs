@@ -309,12 +309,12 @@ fn create_locale_object_from_icu(interp: &mut Interpreter, locale: &IcuLocale) -
         interp
             .get_object_cell_expect(obj_id)
             .borrow_mut()
-            .prototype_id = Some(proto_id);
+            .set_proto(Some(proto_id));
     }
     interp
         .get_object_cell_expect(obj_id)
         .borrow_mut()
-        .class_name = "Intl.Locale";
+        .set_class("Intl.Locale");
     interp.get_object_cell_expect(obj_id).borrow_mut().kind =
         crate::interpreter::types::ObjectKind::Intl(Box::new(build_intl_data_from_locale(locale)));
     JsValue::object(obj_id)
@@ -349,11 +349,11 @@ impl Interpreter {
         if let Some(op_id) = self.realm().object_prototype {
             self.get_object_cell_expect(proto_id)
                 .borrow_mut()
-                .prototype_id = Some(op_id);
+                .set_proto(Some(op_id));
         }
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Intl.Locale";
+            .set_class("Intl.Locale");
 
         // @@toStringTag
         self.define_to_string_tag(proto_id, "Intl.Locale");
@@ -1019,7 +1019,7 @@ impl Interpreter {
                         interp
                             .get_object_cell_expect(info_obj_id)
                             .borrow_mut()
-                            .prototype_id = Some(op_id);
+                            .set_proto(Some(op_id));
                     }
                     interp
                         .get_object_cell_expect(info_obj_id)
@@ -1165,7 +1165,7 @@ impl Interpreter {
                         interp
                             .get_object_cell_expect(info_obj_id)
                             .borrow_mut()
-                            .prototype_id = Some(op_id);
+                            .set_proto(Some(op_id));
                     }
                     interp
                         .get_object_cell_expect(info_obj_id)
@@ -1560,11 +1560,11 @@ impl Interpreter {
                     interp
                         .get_object_cell_expect(obj_id)
                         .borrow_mut()
-                        .prototype_id = Some(locale_proto);
+                        .set_proto(Some(locale_proto));
                     interp
                         .get_object_cell_expect(obj_id)
                         .borrow_mut()
-                        .class_name = "Intl.Locale";
+                        .set_class("Intl.Locale");
                     let lower_tag = tag_string.to_ascii_lowercase();
                     interp.get_object_cell_expect(obj_id).borrow_mut().kind =
                         crate::interpreter::types::ObjectKind::Intl(Box::new(IntlData::Locale {
@@ -1592,11 +1592,11 @@ impl Interpreter {
                     interp
                         .get_object_cell_expect(obj_id)
                         .borrow_mut()
-                        .prototype_id = Some(locale_proto);
+                        .set_proto(Some(locale_proto));
                     interp
                         .get_object_cell_expect(obj_id)
                         .borrow_mut()
-                        .class_name = "Intl.Locale";
+                        .set_class("Intl.Locale");
                     interp.get_object_cell_expect(obj_id).borrow_mut().kind =
                         crate::interpreter::types::ObjectKind::Intl(Box::new(
                             build_intl_data_from_locale(&locale),

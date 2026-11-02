@@ -5,7 +5,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "WeakRef";
+            .set_class("WeakRef");
 
         // WeakRef.prototype.deref
         self.define_method(proto_id, "deref", 0, |interp, this, _args| {
@@ -49,16 +49,16 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .class_name = "WeakRef";
+                    .set_class("WeakRef");
                 if let Some(p) = proto {
                     interp
                         .get_object_cell_expect(obj_id)
                         .borrow_mut()
-                        .prototype_id = Some(p);
+                        .set_proto(Some(p));
                 }
                 interp.keep_during_job(&target);
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind =
-                    crate::interpreter::types::ObjectKind::WeakRef(target);
+                    crate::interpreter::types::ObjectKind::WeakRef(Box::new(target));
                 Completion::Normal(JsValue::object(obj_id))
             },
         ));
@@ -96,7 +96,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "FinalizationRegistry";
+            .set_class("FinalizationRegistry");
 
         // FinalizationRegistry.prototype.register
         self.define_method(proto_id, "register", 2,
@@ -107,7 +107,7 @@ impl Interpreter {
                     // Check [[Cells]] internal slot: class_name + map_data.is_some()
                     let has_cells = {
                         let b = obj.borrow();
-                        b.class_name == "FinalizationRegistry"
+                        b.is_class("FinalizationRegistry")
                             && b.finalization_registry().is_some()
                     };
                     if has_cells {
@@ -166,7 +166,7 @@ impl Interpreter {
                 {
                     let has_cells = {
                         let b = obj.borrow();
-                        b.class_name == "FinalizationRegistry"
+                        b.is_class("FinalizationRegistry")
                             && b.finalization_registry().is_some()
                     };
                     if has_cells {
@@ -212,7 +212,7 @@ impl Interpreter {
             {
                 let has_cells = {
                     let b = obj.borrow();
-                    b.class_name == "FinalizationRegistry" && b.finalization_registry().is_some()
+                    b.is_class("FinalizationRegistry") && b.finalization_registry().is_some()
                 };
                 if has_cells {
                     return Completion::Normal(JsValue::UNDEFINED);
@@ -261,17 +261,17 @@ impl Interpreter {
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .class_name = "FinalizationRegistry";
+                    .set_class("FinalizationRegistry");
                 if let Some(p) = proto {
                     interp
                         .get_object_cell_expect(obj_id)
                         .borrow_mut()
-                        .prototype_id = Some(p);
+                        .set_proto(Some(p));
                 }
                 interp
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
-                    .primitive_value = Some(callback);
+                    .set_primitive_value(callback);
                 // Initialize [[Cells]] as empty FinalizationRegistry slot data.
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind =
                     crate::interpreter::types::ObjectKind::FinalizationRegistry(Box::default());
@@ -333,7 +333,7 @@ impl Interpreter {
         let Some(cell) = self.get_object_cell(registry_id) else {
             return Completion::Normal(JsValue::UNDEFINED);
         };
-        let callback = cell.borrow().primitive_value.clone();
+        let callback = cell.borrow().primitive_value().cloned();
         if let Some(data) = cell.borrow_mut().finalization_registry_data_mut() {
             data.cleanup_queued = false;
         }

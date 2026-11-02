@@ -169,9 +169,9 @@ fn prevalidated_import_module_type(attrs: &[(String, String)]) -> Option<ImportM
 /// pre-load passes need in order to act on it. `None` for items that name no
 /// module (a local declaration, `export { x }` with no `from`, a statement).
 ///
-/// `is_source_phase` is reported as data rather than acted on here because the
-/// loading seam resolves those requests shallowly, while graph traversal still
-/// needs to recognize the request itself.
+/// `is_source_phase` is reported as data, not acted on here: the loading seam
+/// resolves those requests shallowly, while graph traversal must still
+/// recognize them.
 struct ModuleItemRequest<'a> {
     specifier: &'a str,
     attributes: &'a [(String, String)],
@@ -1062,8 +1062,8 @@ impl Interpreter {
         let proto_id = self.abstract_module_source_prototype_id();
         {
             let mut obj = self.get_object_cell_expect(source_id).borrow_mut();
-            obj.prototype_id = proto_id;
-            obj.class_name = "AbstractModuleSource";
+            obj.set_proto(proto_id);
+            obj.set_class("AbstractModuleSource");
         }
         let source_val = JsValue::object(source_id);
 
@@ -1495,7 +1495,7 @@ impl Interpreter {
     /// `get_object_cell_expect(id).borrow_mut()`.
     pub(crate) fn create_object_id(&mut self) -> u64 {
         let mut data = JsObjectData::new();
-        data.prototype_id = self.realm().object_prototype;
+        data.set_proto(self.realm().object_prototype);
         self.alloc_object(data)
     }
 
@@ -1852,7 +1852,7 @@ impl Interpreter {
         let obj_id = self.create_object_id();
         {
             let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
-            o.class_name = "Arguments";
+            o.set_class("Arguments");
             o.properties.reserve(args.len() + 3);
 
             o.push_fresh_property(
@@ -2967,7 +2967,7 @@ impl Interpreter {
                         }));
                     }
                     ExportDeclaration::DefaultClass(c) => {
-                        stmts.push(Statement::ClassDeclaration(c.clone()));
+                        stmts.push(Statement::ClassDeclaration(Box::new(c.clone())));
                     }
                     _ => {}
                 },
@@ -4586,8 +4586,8 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
                     let sab_proto = interp.realm().shared_arraybuffer_prototype;
                     {
                         let mut o = interp.get_object_cell_expect(sab_obj_id).borrow_mut();
-                        o.class_name = "SharedArrayBuffer";
-                        o.prototype_id = sab_proto;
+                        o.set_class("SharedArrayBuffer");
+                        o.set_proto(sab_proto);
                         o.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(Box::new(
                             crate::interpreter::types::ArrayBufferData {
                                 data: buf_rc,

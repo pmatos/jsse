@@ -12,6 +12,9 @@ impl Parser<'_> {
         if self.current == Token::Semicolon {
             self.advance()?;
         }
-        Ok(Statement::DoWhile(DoWhileStatement { test, body }))
+        Ok(Statement::DoWhile(Box::new(DoWhileStatement {
+            test,
+            body,
+        })))
     }
 }

@@ -567,7 +567,7 @@ impl Interpreter {
             let obj_id = self.create_object_id();
             self.get_object_cell_expect(obj_id)
                 .borrow_mut()
-                .prototype_id = None; // ObjectCreate(null)
+                .set_proto(None); // ObjectCreate(null)
             let id = obj_id;
             return Ok(JsValue::object(id));
         }
@@ -591,7 +591,7 @@ impl Interpreter {
             let obj_id = self.create_object_id();
             self.get_object_cell_expect(obj_id)
                 .borrow_mut()
-                .prototype_id = None;
+                .set_proto(None);
             let id = obj_id;
             return Ok(JsValue::object(id));
         }

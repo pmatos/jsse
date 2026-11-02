@@ -155,7 +155,7 @@ impl Interpreter {
                                 }
                             } else {
                                 // Array [[DefineOwnProperty]] §10.4.2.1
-                                let is_array = obj.borrow().class_name == "Array";
+                                let is_array = obj.borrow().is_class("Array");
                                 if is_array {
                                     match interp.array_define_own_property(
                                         target_id as usize,
@@ -233,8 +233,8 @@ impl Interpreter {
                     // character indices are non-configurable.
                     {
                         let b = obj.borrow();
-                        if b.class_name == "String"
-                            && let Some(s) = b.primitive_value.as_ref().and_then(JsValue::as_string)
+                        if b.is_class("String")
+                            && let Some(s) = b.primitive_value().and_then(JsValue::as_string)
                             && (key.as_str() == Some("length")
                                 || crate::interpreter::types::string_exotic_index(&key, s.len())
                                     .is_some())
@@ -423,7 +423,7 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         }
                     }
-                    if let Some(id) = obj.borrow().prototype_id {
+                    if let Some(id) = obj.borrow().proto_id() {
                         return Completion::Normal(JsValue::object(id));
                     }
                 }
@@ -749,7 +749,7 @@ impl Interpreter {
                                 own_desc = Some(d);
                                 break 'proto_walk;
                             }
-                            cur_id = cur_obj.borrow().prototype_id.as_ref().copied();
+                            cur_id = cur_obj.borrow().proto_id().as_ref().copied();
                         } else {
                             break;
                         }
@@ -812,7 +812,7 @@ impl Interpreter {
                                 set: None,
                             };
                             // Array [[DefineOwnProperty]] §10.4.2.1
-                            let is_array = recv_obj.borrow().class_name == "Array";
+                            let is_array = recv_obj.borrow().is_class("Array");
                             if is_array {
                                 match interp.array_define_own_property(
                                     receiver_id as usize,
@@ -872,7 +872,7 @@ impl Interpreter {
                         }
                     }
                     // OrdinarySetPrototypeOf (§10.1.2)
-                    let current_proto_id = obj.borrow().prototype_id;
+                    let current_proto_id = obj.borrow().proto_id();
                     let new_proto_id = proto.as_object_id();
                     // Step 4: If SameValue(V, current), return true
                     if (proto).is_null() && current_proto_id.is_none() {
@@ -903,7 +903,7 @@ impl Interpreter {
                                 if p_obj.borrow().is_proxy() {
                                     break;
                                 }
-                                p_id = p_obj.borrow().prototype_id.as_ref().copied();
+                                p_id = p_obj.borrow().proto_id().as_ref().copied();
                             } else {
                                 break;
                             }
@@ -911,10 +911,10 @@ impl Interpreter {
                     }
                     // Actually set the prototype
                     if proto.is_null() {
-                        obj.borrow_mut().prototype_id = None;
+                        obj.borrow_mut().set_proto(None);
                     } else if let Some(proto_id) = proto.as_object_id() {
                         if let Some(proto_obj) = interp.get_object_cell(proto_id) {
-                            obj.borrow_mut().prototype_id = Some(proto_obj.borrow().id.unwrap());
+                            obj.borrow_mut().set_proto(Some(proto_obj.id()));
                         }
                     } else {
                         unreachable!()

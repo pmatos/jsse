@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::types::JsBigInt;
 
+mod boxed_variants;
 mod capture_walk;
 mod export_specifier;
 mod expr_box;
@@ -157,10 +158,9 @@ impl Body {
 
     /// Identity of this Body, for side tables keyed by Body (`interpreter::ic_store`,
     /// `interpreter::hoist_cache`). Stable across `Body` clones, since they share
-    /// the statement `Rc`. The pointer is an identity only and is never
-    /// dereferenced; a table keyed by it must pin the `Rc` for as long as the key
-    /// lives, so a freed Body's address cannot be reused for an unrelated entry
-    /// (ABA).
+    /// the statement `Rc`. The pointer is never dereferenced; a table keyed
+    /// by it must pin the `Rc` for as long as the key lives, so a freed Body's
+    /// address cannot be reused for an unrelated entry (ABA).
     pub(crate) fn key(&self) -> *const Vec<Statement> {
         Rc::as_ptr(&self.statements)
     }
@@ -260,23 +260,23 @@ pub(crate) enum Statement {
     Expression(Expression, u32),
     Block(Vec<Statement>),
     Variable(VariableDeclaration),
-    If(IfStatement),
-    While(WhileStatement),
-    DoWhile(DoWhileStatement),
-    For(ForStatement),
-    ForIn(ForInStatement),
-    ForOf(ForOfStatement),
+    If(Box<IfStatement>),
+    While(Box<WhileStatement>),
+    DoWhile(Box<DoWhileStatement>),
+    For(Box<ForStatement>),
+    ForIn(Box<ForInStatement>),
+    ForOf(Box<ForOfStatement>),
     Return(Option<Expression>, u32),
     Break(Option<String>, u32),
     Continue(Option<String>),
     Throw(Expression, u32),
-    Try(TryStatement),
-    Switch(SwitchStatement),
+    Try(Box<TryStatement>),
+    Switch(Box<SwitchStatement>),
     Labeled(String, Box<Statement>),
     With(Expression, Box<Statement>),
     Debugger,
-    FunctionDeclaration(FunctionDecl),
-    ClassDeclaration(ClassDecl),
+    FunctionDeclaration(Box<FunctionDecl>),
+    ClassDeclaration(Box<ClassDecl>),
 }
 
 #[derive(Clone, Debug)]
@@ -389,12 +389,12 @@ pub(crate) enum Expression {
     Super,
     Array(Vec<Option<Expression>>, bool),
     Object(Vec<Property>, bool),
-    Function(FunctionExpr),
-    ArrowFunction(ArrowFunction),
-    Class(ClassExpr),
+    Function(Box<FunctionExpr>),
+    ArrowFunction(Box<ArrowFunction>),
+    Class(Box<ClassExpr>),
     Unary(UnaryOp, ExprBox),
-    /// The operator token's source offset plus one under `--node` (else 0)
-    /// is where V8 reports an error the operator throws.
+    /// The operator token's offset plus one under `--node` (else 0): where
+    /// V8 reports an error the operator throws.
     Binary(BinaryOp, ExprBox, ExprBox, u32),
     Logical(LogicalOp, ExprBox, ExprBox),
     /// op, prefix, argument, then V8's error position (offset plus one under
@@ -406,13 +406,12 @@ pub(crate) enum Expression {
     /// Function call `f(args)` / `obj.method(args)`. Third field is a
     /// per-body call IC site identifier (issue #71, Phase 3).
     Call(ExprBox, Vec<Expression>, CallSiteId),
-    /// Constructor invocation `new F(args)`. Carries its own call IC site id —
-    /// not yet read in Phase-3 v1; the slot is allocated for forward
-    /// compatibility (issue #71).
+    /// Constructor invocation `new F(args)`. Carries its own call IC site id,
+    /// not yet read (issue #71).
     New(ExprBox, Vec<Expression>, CallSiteId),
     /// Property access `obj.x` / `obj[key]`. Third field is a per-body
-    /// property-access IC site identifier (issue #71). The runtime cache slot
-    /// lives in the interpreter, keyed by the body identity.
+    /// property-access IC site identifier (issue #71); the cache slot lives
+    /// in the interpreter, keyed by the body identity.
     Member(ExprBox, MemberProperty, PropSiteId),
     OptionalChain(ExprBox, ExprBox),
     #[allow(dead_code)]
@@ -421,8 +420,8 @@ pub(crate) enum Expression {
     Spread(ExprBox, u32),
     Yield(Option<ExprBox>, YieldKind),
     Await(ExprBox, u32),
-    TaggedTemplate(ExprBox, TemplateLiteral),
-    Template(TemplateLiteral),
+    TaggedTemplate(ExprBox, Box<TemplateLiteral>),
+    Template(Box<TemplateLiteral>),
     Typeof(ExprBox),
     Void(ExprBox),
     Delete(ExprBox),

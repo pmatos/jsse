@@ -35,7 +35,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "BigInt";
+            .set_class("BigInt");
 
         // thisBigIntValue (§21.2.3.4.1): a reference-counted handle on the
         // BigInt, not a deep copy of its digits.
@@ -46,8 +46,8 @@ impl Interpreter {
             let object_id = this.as_object_id()?;
             interp.get_object_cell(object_id).and_then(|cell| {
                 let object = cell.borrow();
-                if object.class_name == "BigInt" {
-                    object.primitive_value.as_ref().and_then(JsValue::as_bigint)
+                if object.is_class("BigInt") {
+                    object.primitive_value().and_then(JsValue::as_bigint)
                 } else {
                     None
                 }

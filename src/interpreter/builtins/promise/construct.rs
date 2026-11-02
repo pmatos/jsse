@@ -26,7 +26,7 @@ pub(super) fn promise_construct(interp: &mut Interpreter, args: &[JsValue]) -> C
             && let Some(po) = promise.as_object_id()
             && let Some(pobj) = interp.get_object_cell(po)
         {
-            pobj.borrow_mut().prototype_id = Some(p);
+            pobj.borrow_mut().set_proto(Some(p));
         }
         let promise_id = promise.as_object_id().unwrap_or_default();
         let (resolve_fn, reject_fn) = interp.create_resolving_functions(promise_id);

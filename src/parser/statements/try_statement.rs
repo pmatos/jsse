@@ -42,10 +42,10 @@ impl<'a> Parser<'a> {
         if handler.is_none() && finalizer.is_none() {
             return Err(self.error("Missing catch or finally after try"));
         }
-        Ok(Statement::Try(TryStatement {
+        Ok(Statement::Try(Box::new(TryStatement {
             block,
             handler,
             finalizer,
-        }))
+        })))
     }
 }

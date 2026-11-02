@@ -133,7 +133,7 @@ impl Interpreter {
             if let Some(proto_id) = proto_val.as_ref().and_then(JsValue::as_object_id)
                 && let Some(proto_obj) = self.get_object(proto_id)
             {
-                self.realm_mut().object_prototype = Some(proto_obj.borrow().id.unwrap());
+                self.realm_mut().object_prototype = Some(proto_obj.id());
                 // Object.prototype is an immutable prototype exotic object (§10.4.7)
                 proto_obj.borrow_mut().is_immutable_prototype = true;
                 self.link_error_prototypes(&proto_obj);
@@ -167,9 +167,9 @@ impl Interpreter {
                 let pv = self.get_property_on_id(error_id, "prototype");
                 if let Some(error_proto_id) = pv.as_object_id()
                     && let Some(ep) = self.get_object(error_proto_id)
-                    && ep.borrow().prototype_id.is_none()
+                    && ep.borrow().proto_id().is_none()
                 {
-                    ep.borrow_mut().prototype_id = Some(proto_obj.borrow().id.unwrap());
+                    ep.borrow_mut().set_proto(Some(proto_obj.id()));
                 }
             }
         }
@@ -234,21 +234,21 @@ impl Interpreter {
                         "Array"
                     } else if let Some(obj) = interp.get_object(obj_id) {
                         let ob = obj.borrow();
-                        if ob.class_name == "Arguments" {
+                        if ob.is_class("Arguments") {
                             "Arguments"
                         } else if ob.callable.is_some() {
                             "Function"
-                        } else if super::error_data::has_error_data_slot(ob.class_name) {
+                        } else if super::error_data::has_error_data_slot(ob.class_str()) {
                             "Error"
-                        } else if ob.class_name == "Boolean" && ob.primitive_value.is_some() {
+                        } else if ob.is_class("Boolean") && ob.primitive_value().is_some() {
                             "Boolean"
-                        } else if ob.class_name == "Number" && ob.primitive_value.is_some() {
+                        } else if ob.is_class("Number") && ob.primitive_value().is_some() {
                             "Number"
-                        } else if ob.class_name == "String" && ob.primitive_value.is_some() {
+                        } else if ob.is_class("String") && ob.primitive_value().is_some() {
                             "String"
-                        } else if ob.class_name == "Date" {
+                        } else if ob.is_class("Date") {
                             "Date"
-                        } else if ob.class_name == "RegExp" {
+                        } else if ob.is_class("RegExp") {
                             "RegExp"
                         } else {
                             "Object"
@@ -394,7 +394,7 @@ impl Interpreter {
                                 Err(e) => return Completion::Throw(e),
                             }
                         } else {
-                            match obj.borrow().prototype_id {
+                            match obj.borrow().proto_id() {
                                 Some(p) => {
                                     let pid = p;
                                     JsValue::object(pid)
@@ -605,7 +605,7 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         }
                     } else if let Some(obj) = interp.get_object(obj_id) {
-                        match obj.borrow().prototype_id {
+                        match obj.borrow().proto_id() {
                             Some(p) => {
                                 let pid = p;
                                 JsValue::object(pid)
@@ -668,7 +668,7 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         }
                     } else if let Some(obj) = interp.get_object(obj_id) {
-                        match obj.borrow().prototype_id {
+                        match obj.borrow().proto_id() {
                             Some(p) => {
                                 let pid = p;
                                 JsValue::object(pid)
@@ -718,7 +718,7 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         }
                     }
-                    return if let Some(pid) = obj.borrow().prototype_id {
+                    return if let Some(pid) = obj.borrow().proto_id() {
                         Completion::Normal(JsValue::object(pid))
                     } else {
                         Completion::Normal(JsValue::NULL)
@@ -763,7 +763,7 @@ impl Interpreter {
                                     }
                                 }
                                 // OrdinarySetPrototypeOf: SameValue(V, current) check
-                                let current_proto_id = obj.borrow().prototype_id;
+                                let current_proto_id = obj.borrow().proto_id();
                                 let same = current_proto_id.is_none() && proto.is_null()
                                     || current_proto_id
                                         .zip(proto.as_object_id())
@@ -777,9 +777,9 @@ impl Interpreter {
                                     ));
                                 }
                                 if proto.is_null() {
-                                    obj.borrow_mut().prototype_id = None;
+                                    obj.borrow_mut().set_proto(None);
                                 } else if let Some(proto_id) = proto.as_object_id() {
-                                        let obj_id = obj.borrow().id;
+                                        let obj_id = Some(obj.id());
                                         let mut check = Some(proto_id);
                                         while let Some(c_id) = check {
                                             if Some(c_id) == obj_id {
@@ -789,9 +789,9 @@ impl Interpreter {
                                                     ),
                                                 );
                                             }
-                                            check = interp.get_object_cell_expect(c_id).borrow().prototype_id;
+                                            check = interp.get_object_cell_expect(c_id).borrow().proto_id();
                                         }
-                                        obj.borrow_mut().prototype_id = Some(proto_id);
+                                        obj.borrow_mut().set_proto(Some(proto_id));
                                 }
                             }
                         Completion::Normal(JsValue::UNDEFINED)
@@ -871,7 +871,7 @@ impl Interpreter {
                         }
                         match interp.to_property_descriptor(&desc_val) {
                             Ok(desc) => {
-                                let is_array = obj.borrow().class_name == "Array";
+                                let is_array = obj.borrow().is_class("Array");
                                 let is_ta = obj.borrow().typed_array_info().is_some();
                                 if is_array {
                                     match interp.array_define_own_property(target_id as usize, &key, desc) {
@@ -1044,7 +1044,7 @@ impl Interpreter {
                         && let Some(obj) = interp.get_object_cell(obj_id)
                     {
                         let b = obj.borrow();
-                        if let Some(s) = b.primitive_value.as_ref().and_then(JsValue::as_string) {
+                        if let Some(s) = b.primitive_value().and_then(JsValue::as_string) {
                             for i in 0..s.len() {
                                 extra_str_keys.push(JsPropertyKey::from(i.to_string()));
                             }
@@ -1326,7 +1326,7 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         }
                     }
-                    if let Some(id) = obj.borrow().prototype_id {
+                    if let Some(id) = obj.borrow().proto_id() {
                         return Completion::Normal(JsValue::object(id));
                     }
                 }
@@ -1506,7 +1506,7 @@ impl Interpreter {
                     interp
                         .get_object_cell_expect(result_obj_id)
                         .borrow_mut()
-                        .prototype_id = None;
+                        .set_proto(None);
                     let result_id = result_obj_id;
                     let result_val = JsValue::object(result_id);
                     interp.gc_root_value(&result_val);
@@ -2085,7 +2085,7 @@ impl Interpreter {
                         }
                         // Immutable prototype exotic object check (Object.prototype)
                         if obj.borrow().is_immutable_prototype {
-                            let current_proto_id = obj.borrow().prototype_id;
+                            let current_proto_id = obj.borrow().proto_id();
                             let new_proto_id = proto.as_object_id();
                             let same = ((proto).is_null() && current_proto_id.is_none())
                                 || matches!((new_proto_id, current_proto_id), (Some(a), Some(b)) if a == b);
@@ -2097,7 +2097,7 @@ impl Interpreter {
                             return Completion::Normal(target);
                         }
                         // OrdinarySetPrototypeOf checks
-                        let current_proto_id = obj.borrow().prototype_id;
+                        let current_proto_id = obj.borrow().proto_id();
                         let new_proto_id = proto.as_object_id();
                         // Same value check
                         let same = ((proto).is_null() && current_proto_id.is_none())
@@ -2119,7 +2119,7 @@ impl Interpreter {
                                         if p_obj.borrow().is_proxy() {
                                             break;
                                         }
-                                        p_id = p_obj.borrow().prototype_id;
+                                        p_id = p_obj.borrow().proto_id();
                                     } else {
                                         break;
                                     }
@@ -2127,9 +2127,9 @@ impl Interpreter {
                             }
                         }
                         if proto.is_null() {
-                            obj.borrow_mut().prototype_id = None;
+                            obj.borrow_mut().set_proto(None);
                         } else if let Some(proto_id) = proto.as_object_id() {
-                            obj.borrow_mut().prototype_id = Some(proto_id);
+                            obj.borrow_mut().set_proto(Some(proto_id));
                         }
                     }
                     Completion::Normal(target)

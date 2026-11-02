@@ -95,7 +95,7 @@ impl Interpreter {
                     return Some(name.to_string());
                 }
             }
-            id = object.prototype_id?;
+            id = object.proto_id()?;
         }
         None
     }

@@ -510,15 +510,12 @@ fn end_to_end_computed_write_null_base_message_matches_tree_walker() {
 
 #[test]
 fn end_to_end_member_chain_base_survives_gc_during_rhs_evaluation() {
-    // Two-hop GC-rooting regression (mirrors test262-extra/GC-member-assignment-base-rooting.js,
-    // but exercises the *bytecode* GetProp/SetProp opcodes specifically). `a.base` is read
-    // first, pushing a freshly-allocated, otherwise-unreferenced object onto the VM operand
-    // stack. `a.rhs` is evaluated next as the assignment's RHS — a *separate*, later-dispatched
-    // GetProp opcode whose own getter forces a GC collection ($262.gc()) before the pending
-    // `a.base` result is ever consumed by the final SetProp("value"). A single-hop test (e.g.
-    // `x.value = rhs()` with a local `x`) would pass even if the VM's
-    // whole-stack rooting fix were missing, since `x` stays separately reachable via the
-    // environment/call-frame roots regardless — this shape specifically requires the fix.
+    // Two-hop GC-rooting regression (mirrors test262-extra/GC-member-assignment-base-rooting.js
+    // for the *bytecode* GetProp/SetProp opcodes). `a.base` pushes a fresh, otherwise
+    // unreferenced object onto the VM operand stack. `a.rhs`, a later GetProp, has a getter
+    // that forces a collection ($262.gc()) before the final SetProp("value") consumes it. A
+    // single-hop test (`x.value = rhs()` with a local `x`) would pass without the VM's
+    // whole-stack rooting, since `x` stays reachable via the environment roots anyway.
     let source = "
         var observed = 0;
         var prototype = { set value(v) { observed = v; } };
@@ -1226,7 +1223,7 @@ fn if_truthiness_coercion_matches_tree_walker() {
 fn compile_body_if_lowers_via_vm_directly() {
     use crate::ast::{BinaryOp, IfStatement};
     // if (1 < 2) return 10; else return 20;
-    let body = vec![Statement::If(IfStatement {
+    let body = vec![Statement::If(Box::new(IfStatement {
         test: Expression::Binary(
             BinaryOp::Lt,
             ExprBox::new(Expression::Literal(Literal::Number(1.0))),
@@ -1242,7 +1239,7 @@ fn compile_body_if_lowers_via_vm_directly() {
             0,
         ))),
         at: 0,
-    })];
+    }))];
     let chunk = compile_body(&body).expect("compile if/else");
     match run(chunk) {
         Completion::Return(value) => assert_eq!(value.as_number(), Some(10.0)),
@@ -1368,7 +1365,7 @@ fn compile_body_one_armed_if_returning_consequent_false_path_is_safe() {
     // `ReturnUndefined` — otherwise the VM runs `pc` off the end of `code` and
     // panics. With a constant-false test the consequent never runs, so the
     // chunk must complete as `Return(Undefined)`.
-    let body = vec![Statement::If(IfStatement {
+    let body = vec![Statement::If(Box::new(IfStatement {
         test: Expression::Literal(Literal::Boolean(false)),
         consequent: Box::new(Statement::Return(
             Some(Expression::Literal(Literal::Number(1.0))),
@@ -1376,7 +1373,7 @@ fn compile_body_one_armed_if_returning_consequent_false_path_is_safe() {
         )),
         alternate: None,
         at: 0,
-    })];
+    }))];
     let chunk = compile_body(&body).expect("compile one-armed if");
     match run(chunk) {
         Completion::Return(value) if value.is_undefined() => {}
@@ -1905,10 +1902,10 @@ fn labeled_literal_true_while_omits_repeated_test_dispatch() {
 
     let body = vec![Statement::Labeled(
         "loop".to_string(),
-        Box::new(Statement::While(WhileStatement {
+        Box::new(Statement::While(Box::new(WhileStatement {
             test: Expression::Literal(Literal::Boolean(true)),
             body: Box::new(Statement::Break(Some("loop".to_string()), 0)),
-        })),
+        }))),
     )];
     let chunk = compile_body(&body).expect("compile labeled while(true)");
     assert_eq!(chunk.code[0], Op::Safepoint as u8);
@@ -1929,13 +1926,13 @@ fn labeled_literal_true_for_omits_repeated_test_dispatch() {
 
     let body = vec![Statement::Labeled(
         "loop".to_string(),
-        Box::new(Statement::For(ForStatement {
+        Box::new(Statement::For(Box::new(ForStatement {
             init: None,
             test: Some(Expression::Literal(Literal::Boolean(true))),
             update: None,
             body: Box::new(Statement::Break(Some("loop".to_string()), 0)),
             scope_capture: Default::default(),
-        })),
+        }))),
     )];
     let chunk = compile_body(&body).expect("compile labeled for(;true;)");
     assert_eq!(chunk.code[0], Op::Safepoint as u8);

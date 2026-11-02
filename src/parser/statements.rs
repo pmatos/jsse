@@ -451,12 +451,12 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        Ok(Statement::If(IfStatement {
+        Ok(Statement::If(Box::new(IfStatement {
             test,
             consequent,
             alternate,
             at,
-        }))
+        })))
     }
 
     fn is_labelled_function(stmt: &Statement) -> bool {
@@ -499,7 +499,7 @@ impl<'a> Parser<'a> {
         let test = self.parse_cond()?;
         self.eat(&Token::RightParen)?;
         let body = self.parse_iteration_body()?;
-        Ok(Statement::While(WhileStatement { test, body }))
+        Ok(Statement::While(Box::new(WhileStatement { test, body })))
     }
 
     fn parse_for_statement(&mut self) -> Result<Statement, ParseError> {
@@ -548,7 +548,7 @@ impl<'a> Parser<'a> {
                 let body = self.parse_iteration_body()?;
                 let decls = vec![VariableDeclarator::new(Pattern::Identifier(ident), None)];
                 Self::check_for_in_of_early_errors(VarKind::Using, &decls, &body)?;
-                return Ok(Statement::ForOf(ForOfStatement {
+                return Ok(Statement::ForOf(Box::new(ForOfStatement {
                     left: ForInOfLeft::Variable(VariableDeclaration {
                         kind: VarKind::Using,
                         declarations: decls,
@@ -559,7 +559,7 @@ impl<'a> Parser<'a> {
                     at,
                     right_at,
                     scope_capture: Default::default(),
-                }));
+                })));
             }
             // for (using x = init; test; update)
             if self.current != Token::Assign {
@@ -608,13 +608,13 @@ impl<'a> Parser<'a> {
             };
             self.eat(&Token::RightParen)?;
             let body = self.parse_iteration_body()?;
-            return Ok(Statement::For(ForStatement {
+            return Ok(Statement::For(Box::new(ForStatement {
                 init,
                 test,
                 update: update.map(ExprBox::new),
                 body,
                 scope_capture: Default::default(),
-            }));
+            })));
         }
 
         // for (await using x of expr) or for (await using x = expr; test; update)
@@ -656,7 +656,7 @@ impl<'a> Parser<'a> {
                 let body = self.parse_iteration_body()?;
                 let decls = vec![VariableDeclarator::new(Pattern::Identifier(ident), None)];
                 Self::check_for_in_of_early_errors(VarKind::AwaitUsing, &decls, &body)?;
-                return Ok(Statement::ForOf(ForOfStatement {
+                return Ok(Statement::ForOf(Box::new(ForOfStatement {
                     left: ForInOfLeft::Variable(VariableDeclaration {
                         kind: VarKind::AwaitUsing,
                         declarations: decls,
@@ -667,7 +667,7 @@ impl<'a> Parser<'a> {
                     at,
                     right_at,
                     scope_capture: Default::default(),
-                }));
+                })));
             }
             // for (await using x = init; test; update)
             if self.current != Token::Assign {
@@ -715,13 +715,13 @@ impl<'a> Parser<'a> {
             };
             self.eat(&Token::RightParen)?;
             let body = self.parse_iteration_body()?;
-            return Ok(Statement::For(ForStatement {
+            return Ok(Statement::For(Box::new(ForStatement {
                 init,
                 test,
                 update: update.map(ExprBox::new),
                 body,
                 scope_capture: Default::default(),
-            }));
+            })));
         }
 
         // for (init; test; update)
@@ -752,7 +752,7 @@ impl<'a> Parser<'a> {
                     let right = self.parse_cond()?;
                     self.eat(&Token::RightParen)?;
                     let body = self.parse_iteration_body()?;
-                    return Ok(Statement::ForIn(ForInStatement {
+                    return Ok(Statement::ForIn(Box::new(ForInStatement {
                         left: ForInOfLeft::Variable(VariableDeclaration {
                             kind: VarKind::Var,
                             declarations: decls,
@@ -760,7 +760,7 @@ impl<'a> Parser<'a> {
                         right,
                         body,
                         scope_capture: Default::default(),
-                    }));
+                    })));
                 }
                 if self.current == Token::Keyword(Keyword::Of) {
                     if decls.len() != 1 || decls[0].init.is_some() {
@@ -770,7 +770,7 @@ impl<'a> Parser<'a> {
                     let (right, right_at) = self.parse_for_of_right()?;
                     self.eat(&Token::RightParen)?;
                     let body = self.parse_iteration_body()?;
-                    return Ok(Statement::ForOf(ForOfStatement {
+                    return Ok(Statement::ForOf(Box::new(ForOfStatement {
                         left: ForInOfLeft::Variable(VariableDeclaration {
                             kind: VarKind::Var,
                             declarations: decls,
@@ -781,7 +781,7 @@ impl<'a> Parser<'a> {
                         at,
                         right_at,
                         scope_capture: Default::default(),
-                    }));
+                    })));
                 }
                 Some(ForInit::Variable(VariableDeclaration {
                     kind: VarKind::Var,
@@ -789,11 +789,8 @@ impl<'a> Parser<'a> {
                 }))
             }
             Token::Keyword(Keyword::Let) if !self.strict => {
-                // In sloppy mode, `let` might be used as an identifier.
-                // `for (let in ...)` → identifier
-                // `for (let [` → destructuring declaration
-                // `for (let ident` → let declaration
-                // `for (let; ...)` → identifier (let followed by `;`, `=`, `)`, etc.)
+                // Sloppy mode: `let` may be an identifier (`for (let in`,
+                // `for (let;`), else a declaration (`for (let [`, `for (let x`).
                 let is_let_identifier = self.for_let_is_identifier();
                 if is_let_identifier {
                     // Reclassify sloppy-mode `let`; the lexer is already
@@ -823,12 +820,12 @@ impl<'a> Parser<'a> {
                             self.check_strict_assignment_pattern(&pat)?;
                             ForInOfLeft::Pattern(pat)
                         };
-                        return Ok(Statement::ForIn(ForInStatement {
+                        return Ok(Statement::ForIn(Box::new(ForInStatement {
                             left,
                             right,
                             body,
                             scope_capture: Default::default(),
-                        }));
+                        })));
                     }
                     if self.current == Token::Keyword(Keyword::Of) {
                         if self.head_is_let(head_start) {
@@ -845,7 +842,7 @@ impl<'a> Parser<'a> {
                             self.check_strict_assignment_pattern(&pat)?;
                             ForInOfLeft::Pattern(pat)
                         };
-                        return Ok(Statement::ForOf(ForOfStatement {
+                        return Ok(Statement::ForOf(Box::new(ForOfStatement {
                             left,
                             right,
                             body,
@@ -853,7 +850,7 @@ impl<'a> Parser<'a> {
                             at,
                             right_at,
                             scope_capture: Default::default(),
-                        }));
+                        })));
                     }
                     Some(ForInit::Expression(expr))
                 } else {
@@ -877,7 +874,7 @@ impl<'a> Parser<'a> {
                         self.eat(&Token::RightParen)?;
                         let body = self.parse_iteration_body()?;
                         Self::check_for_in_of_early_errors(kind, &decls, &body)?;
-                        return Ok(Statement::ForIn(ForInStatement {
+                        return Ok(Statement::ForIn(Box::new(ForInStatement {
                             left: ForInOfLeft::Variable(VariableDeclaration {
                                 kind,
                                 declarations: decls,
@@ -885,7 +882,7 @@ impl<'a> Parser<'a> {
                             right,
                             body,
                             scope_capture: Default::default(),
-                        }));
+                        })));
                     }
                     if self.current == Token::Keyword(Keyword::Of) {
                         if decls.len() != 1 || decls[0].init.is_some() {
@@ -896,7 +893,7 @@ impl<'a> Parser<'a> {
                         self.eat(&Token::RightParen)?;
                         let body = self.parse_iteration_body()?;
                         Self::check_for_in_of_early_errors(kind, &decls, &body)?;
-                        return Ok(Statement::ForOf(ForOfStatement {
+                        return Ok(Statement::ForOf(Box::new(ForOfStatement {
                             left: ForInOfLeft::Variable(VariableDeclaration {
                                 kind,
                                 declarations: decls,
@@ -907,7 +904,7 @@ impl<'a> Parser<'a> {
                             at,
                             right_at,
                             scope_capture: Default::default(),
-                        }));
+                        })));
                     }
                     // Duplicate lexical bindings: for (let [z, z] = ...; ...)
                     {
@@ -952,7 +949,7 @@ impl<'a> Parser<'a> {
                     self.eat(&Token::RightParen)?;
                     let body = self.parse_iteration_body()?;
                     Self::check_for_in_of_early_errors(kind, &decls, &body)?;
-                    return Ok(Statement::ForIn(ForInStatement {
+                    return Ok(Statement::ForIn(Box::new(ForInStatement {
                         left: ForInOfLeft::Variable(VariableDeclaration {
                             kind,
                             declarations: decls,
@@ -960,7 +957,7 @@ impl<'a> Parser<'a> {
                         right,
                         body,
                         scope_capture: Default::default(),
-                    }));
+                    })));
                 }
                 if self.current == Token::Keyword(Keyword::Of) {
                     if decls.len() != 1 || decls[0].init.is_some() {
@@ -971,7 +968,7 @@ impl<'a> Parser<'a> {
                     self.eat(&Token::RightParen)?;
                     let body = self.parse_iteration_body()?;
                     Self::check_for_in_of_early_errors(kind, &decls, &body)?;
-                    return Ok(Statement::ForOf(ForOfStatement {
+                    return Ok(Statement::ForOf(Box::new(ForOfStatement {
                         left: ForInOfLeft::Variable(VariableDeclaration {
                             kind,
                             declarations: decls,
@@ -982,7 +979,7 @@ impl<'a> Parser<'a> {
                         at,
                         right_at,
                         scope_capture: Default::default(),
-                    }));
+                    })));
                 }
                 // §14.3.1.1: const declarations must have initializers
                 if kind == VarKind::Const {
@@ -1037,12 +1034,12 @@ impl<'a> Parser<'a> {
                     let right = self.parse_cond()?;
                     self.eat(&Token::RightParen)?;
                     let body = self.parse_iteration_body()?;
-                    return Ok(Statement::ForIn(ForInStatement {
+                    return Ok(Statement::ForIn(Box::new(ForInStatement {
                         left,
                         right,
                         body,
                         scope_capture: Default::default(),
-                    }));
+                    })));
                 }
                 if self.current == Token::Keyword(Keyword::Of) {
                     if self.head_is_let(head_start) {
@@ -1067,7 +1064,7 @@ impl<'a> Parser<'a> {
                         self.check_strict_assignment_pattern(&pat)?;
                         ForInOfLeft::Pattern(pat)
                     };
-                    return Ok(Statement::ForOf(ForOfStatement {
+                    return Ok(Statement::ForOf(Box::new(ForOfStatement {
                         left,
                         right,
                         body,
@@ -1075,7 +1072,7 @@ impl<'a> Parser<'a> {
                         at,
                         right_at,
                         scope_capture: Default::default(),
-                    }));
+                    })));
                 }
                 Some(ForInit::Expression(expr))
             }
@@ -1118,13 +1115,13 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        Ok(Statement::For(ForStatement {
+        Ok(Statement::For(Box::new(ForStatement {
             init,
             test,
             update: update.map(ExprBox::new),
             body,
             scope_capture: Default::default(),
-        }))
+        })))
     }
 
     fn parse_return_statement(&mut self) -> Result<Statement, ParseError> {
@@ -1215,12 +1212,9 @@ impl<'a> Parser<'a> {
                 self.eat(&Token::Colon)?;
                 None
             };
-            // Unlike the other four `with_block_scope` sites, this one must
-            // not touch `in_block_or_function` — it stays at its ambient
-            // value here, only `in_switch_case` re-scopes (statements.rs:8/17
-            // reads `(!in_block_or_function && !is_module) || in_switch_case`,
-            // so forcing `in_block_or_function` true would wrongly allow a
-            // `using`/`await using` declaration directly in a case body).
+            // Unlike the other `with_block_scope` sites, only `in_switch_case`
+            // re-scopes here: forcing `in_block_or_function` true would
+            // wrongly allow `using` directly in a case body.
             let consequent = self.with_block_scope(
                 |p| p.in_switch_case = true,
                 |p| p.parse_switch_case_consequent(&mut lexical_names, &mut func_decl_names),

@@ -79,7 +79,7 @@ impl Parser<'_> {
                 Token::NoSubstitutionTemplate(_, _) | Token::TemplateHead(_, _) => {
                     v8_position::early_expression(v8_position::at(self.current_token_start));
                     let tmpl = self.parse_template_literal_expr(true)?;
-                    callee = Expression::TaggedTemplate(ExprBox::new(callee), tmpl);
+                    callee = Expression::TaggedTemplate(ExprBox::new(callee), Box::new(tmpl));
                 }
                 _ => break,
             }

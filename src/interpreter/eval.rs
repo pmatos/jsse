@@ -1287,27 +1287,27 @@ impl Interpreter {
             return Completion::Normal(val.clone());
         }
         let mut obj_data = JsObjectData::new();
-        obj_data.primitive_value = Some(val.clone());
+        obj_data.set_primitive_value(val.clone());
         if val.is_string() {
-            obj_data.class_name = "String";
-            obj_data.prototype_id = self.realm().string_prototype;
+            obj_data.set_class("String");
+            obj_data.set_proto(self.realm().string_prototype);
         } else if val.is_number() {
-            obj_data.class_name = "Number";
-            obj_data.prototype_id = self.realm().number_prototype;
+            obj_data.set_class("Number");
+            obj_data.set_proto(self.realm().number_prototype);
         } else if val.is_boolean() {
-            obj_data.class_name = "Boolean";
-            obj_data.prototype_id = self.realm().boolean_prototype;
+            obj_data.set_class("Boolean");
+            obj_data.set_proto(self.realm().boolean_prototype);
         } else if val.is_symbol() {
-            obj_data.class_name = "Symbol";
-            obj_data.prototype_id = self.realm().symbol_prototype;
+            obj_data.set_class("Symbol");
+            obj_data.set_proto(self.realm().symbol_prototype);
         } else if val.is_bigint() {
-            obj_data.class_name = "BigInt";
-            obj_data.prototype_id = self.realm().bigint_prototype;
+            obj_data.set_class("BigInt");
+            obj_data.set_proto(self.realm().bigint_prototype);
         } else {
             unreachable!();
         }
-        if obj_data.prototype_id.is_none() {
-            obj_data.prototype_id = self.realm().object_prototype;
+        if obj_data.proto_id().is_none() {
+            obj_data.set_proto(self.realm().object_prototype);
         }
         let id = self.alloc_object(obj_data);
         Completion::Normal(JsValue::object(id))
@@ -4459,7 +4459,7 @@ impl Interpreter {
                 let super_ctor = active_ctor
                     .as_object_id()
                     .and_then(|id| interp.get_object_cell(id))
-                    .and_then(|func| func.borrow().prototype_id)
+                    .and_then(|func| func.borrow().proto_id())
                     .map_or(JsValue::NULL, JsValue::object);
                 interp.gc_root_value(&super_ctor);
                 let arg_vals = match interp.eval_spread_args(args, env, site_id.1) {
@@ -4544,7 +4544,7 @@ impl Interpreter {
                     if let Some(home_id) = home.as_ref().and_then(JsValue::as_object_id) {
                         let proto_id = self
                             .get_object_cell(home_id)
-                            .and_then(|ho_obj| ho_obj.borrow().prototype_id.as_ref().copied());
+                            .and_then(|ho_obj| ho_obj.borrow().proto_id().as_ref().copied());
                         if let Some(pid) = proto_id {
                             let method = self.get_property_on_id(pid, &key);
                             (method, this_val)
@@ -5425,7 +5425,7 @@ impl Interpreter {
                                         interp
                                             .get_object_cell_expect(gen_obj_id)
                                             .borrow_mut()
-                                            .prototype_id = Some(proto_id);
+                                            .set_proto(Some(proto_id));
                                         proto_set = true;
                                     }
                                 }
@@ -5439,12 +5439,12 @@ impl Interpreter {
                                     interp
                                         .get_object_cell_expect(gen_obj_id)
                                         .borrow_mut()
-                                        .prototype_id = agp_id;
+                                        .set_proto(agp_id);
                                 }
                                 interp
                                     .get_object_cell_expect(gen_obj_id)
                                     .borrow_mut()
-                                    .class_name = "AsyncGenerator";
+                                    .set_class("AsyncGenerator");
                                 let exec_env = interp.hosted_body_env(
                                     &func_env,
                                     &params,
@@ -5537,7 +5537,7 @@ impl Interpreter {
                                         interp
                                             .get_object_cell_expect(gen_obj_id)
                                             .borrow_mut()
-                                            .prototype_id = Some(proto_id);
+                                            .set_proto(Some(proto_id));
                                         proto_set = true;
                                     }
                                 }
@@ -5550,12 +5550,12 @@ impl Interpreter {
                                     interp
                                         .get_object_cell_expect(gen_obj_id)
                                         .borrow_mut()
-                                        .prototype_id = gp_id;
+                                        .set_proto(gp_id);
                                 }
                                 interp
                                     .get_object_cell_expect(gen_obj_id)
                                     .borrow_mut()
-                                    .class_name = "Generator";
+                                    .set_class("Generator");
                                 let exec_env = interp.hosted_body_env(
                                     &func_env,
                                     &params,
@@ -5821,7 +5821,7 @@ impl Interpreter {
             format!("\"{preview}\"")
         } else if let Some(id) = val.as_object_id() {
             match self.get_object_cell(id) {
-                Some(obj) => format!("#<{}>", obj.borrow().class_name),
+                Some(obj) => format!("#<{}>", obj.borrow().class_str()),
                 None => "#<Object>".to_string(),
             }
         } else {
@@ -6511,7 +6511,7 @@ impl Interpreter {
             .and_then(|id| self.get_object_cell(id))
             .expect("callers check the constructor kind")
             .borrow()
-            .prototype_id
+            .proto_id()
             .map_or(JsValue::NULL, JsValue::object);
         // No JS call frame separates this from the parent's [[Construct]], so
         // count the depth here: a class whose [[Prototype]] constructs the
@@ -6678,7 +6678,7 @@ impl Interpreter {
                 if let Some(proto_id) = proto_id {
                     self.get_object_cell_expect(new_obj_id)
                         .borrow_mut()
-                        .prototype_id = Some(proto_id);
+                        .set_proto(Some(proto_id));
                 }
                 let this_val = JsValue::object(new_obj_id);
                 if let Err(e) = self.initialize_instance_elements(this_val.clone(), constructor) {
@@ -6715,11 +6715,7 @@ impl Interpreter {
         if let Some(ref nt) = self.new_target.clone()
             && let Some(nt_o) = (nt).as_object_id().map(|id| crate::types::JsObject { id })
         {
-            let nt_proto_id = if let Some(nt_obj) = self.get_object_cell(nt_o.id) {
-                nt_obj.borrow().id
-            } else {
-                None
-            };
+            let nt_proto_id = self.get_object_cell(nt_o.id).map(ObjectHandle::id);
             let same = if let Some(dp_id) = default_proto_id {
                 nt_proto_id == Some(dp_id)
             } else {
@@ -6736,7 +6732,7 @@ impl Interpreter {
                     .map(|id| crate::types::JsObject { id })
                     && let Some(obj_rc) = self.get_object_cell(obj_id)
                 {
-                    obj_rc.borrow_mut().prototype_id = Some(po.id);
+                    obj_rc.borrow_mut().set_proto(Some(po.id));
                 } else {
                     // proto is not an Object: GetFunctionRealm(newTarget) → realm's intrinsic
                     let nt_realm_id = match self.get_function_realm(&JsValue::object(nt_o.id)) {
@@ -6747,7 +6743,7 @@ impl Interpreter {
                     if let Some(proto_rc) = fallback_id
                         && let Some(obj_rc) = self.get_object_cell(obj_id)
                     {
-                        obj_rc.borrow_mut().prototype_id = Some(proto_rc);
+                        obj_rc.borrow_mut().set_proto(Some(proto_rc));
                     }
                 }
             }
@@ -7499,7 +7495,7 @@ impl Interpreter {
         if let Some(home_id) = home.as_ref().and_then(JsValue::as_object_id)
             && let Some(home_obj) = self.get_object_cell(home_id)
         {
-            return home_obj.borrow().prototype_id;
+            return home_obj.borrow().proto_id();
         }
         // Fallback: __super__.prototype_id
         let obj_val = env.borrow().get("__super__").unwrap_or(JsValue::UNDEFINED);
@@ -9536,7 +9532,7 @@ impl Interpreter {
                         }
                         return Ok(JsValue::UNDEFINED);
                     }
-                    current_id = b.prototype_id;
+                    current_id = b.proto_id();
                 } else {
                     break;
                 }

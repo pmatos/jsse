@@ -12,7 +12,7 @@ impl Interpreter {
         let Some(own) = self.own_data_string(id, "name") else {
             return;
         };
-        let Some(proto) = self.get_object(id).and_then(|o| o.borrow().prototype_id) else {
+        let Some(proto) = self.get_object(id).and_then(|o| o.borrow().proto_id()) else {
             return;
         };
         let inherited = self.get_property_on_id(proto, "name");

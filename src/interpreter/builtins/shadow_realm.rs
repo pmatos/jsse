@@ -7,8 +7,8 @@ impl Interpreter {
         let op = self.realm().object_prototype;
         {
             let mut p = self.get_object_cell_expect(proto_id).borrow_mut();
-            p.class_name = "ShadowRealm";
-            p.prototype_id = op;
+            p.set_class("ShadowRealm");
+            p.set_proto(op);
         }
 
         // ShadowRealm.prototype[Symbol.toStringTag] = "ShadowRealm"
@@ -35,10 +35,10 @@ impl Interpreter {
                 let obj_id = interp.create_object_id();
                 {
                     let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
-                    o.class_name = "ShadowRealm";
+                    o.set_class("ShadowRealm");
                     o.kind = crate::interpreter::types::ObjectKind::ShadowRealm(new_realm_id);
                     if let Some(proto_id) = proto_val_for_ctor.as_object_id() {
-                        o.prototype_id = Some(proto_id);
+                        o.set_proto(Some(proto_id));
                     }
                 }
                 Completion::Normal(JsValue::object(obj_id))

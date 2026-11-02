@@ -11,7 +11,7 @@ impl Interpreter {
         let proto_id = self.create_object_id();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .class_name = "Temporal.PlainTime";
+            .set_class("Temporal.PlainTime");
         self.define_to_string_tag(proto_id, "Temporal.PlainTime");
 
         // Getters
@@ -859,12 +859,12 @@ pub(super) fn create_plain_time_result(
     interp
         .get_object_cell_expect(obj_id)
         .borrow_mut()
-        .class_name = "Temporal.PlainTime";
+        .set_class("Temporal.PlainTime");
     if let Some(proto_id) = interp.realm().temporal_plain_time_prototype {
         interp
             .get_object_cell_expect(obj_id)
             .borrow_mut()
-            .prototype_id = Some(proto_id);
+            .set_proto(Some(proto_id));
     }
     interp.get_object_cell_expect(obj_id).borrow_mut().kind =
         crate::interpreter::types::ObjectKind::Temporal(Box::new(TemporalData::PlainTime {

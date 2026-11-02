@@ -53,8 +53,7 @@ fn walk_index_free_chain(interp: &Interpreter, start: Option<u64>, scan_keys: bo
         match &b.kind {
             // String wrappers are Ordinary but expose virtual index
             // properties that never reach `properties`.
-            ObjectKind::Ordinary if !b.primitive_value.as_ref().is_some_and(JsValue::is_string) => {
-            }
+            ObjectKind::Ordinary if !b.primitive_value().is_some_and(JsValue::is_string) => {}
             ObjectKind::Array(_) if b.array_elements().is_some_and(|e| e.is_empty()) => {}
             _ => return false,
         }
@@ -63,7 +62,7 @@ fn walk_index_free_chain(interp: &Interpreter, start: Option<u64>, scan_keys: bo
         {
             return false;
         }
-        next = b.prototype_id;
+        next = b.proto_id();
         hops += 1;
         if hops > 64 {
             return false;
@@ -88,7 +87,7 @@ pub(crate) fn try_intrinsic_iteration(
     let b = array_cell(interp, iterable)?.borrow();
     let elements = b.array_elements()?;
     let realm = interp.realm();
-    if !b.is_plain_dense_array(elements.len()) || b.prototype_id != realm.array_prototype {
+    if !b.is_plain_dense_array(elements.len()) || b.proto_id() != realm.array_prototype {
         return None;
     }
     let iterator_key = JsPropertyKey::cached_well_known_symbol("iterator")?;
@@ -107,7 +106,7 @@ pub(crate) fn try_intrinsic_iteration(
     if next.value().and_then(JsValue::as_object_id) != Some(next_id) {
         return None;
     }
-    if has_hole(elements) && !proto_chain_index_free(interp, b.prototype_id) {
+    if has_hole(elements) && !proto_chain_index_free(interp, b.proto_id()) {
         return None;
     }
     Some(elements.to_vec())
@@ -135,7 +134,7 @@ fn array_cell<'a>(interp: &'a Interpreter, o: &JsValue) -> Option<&'a ObjectHand
 // properties, so the receiver must be extensible) and must keep holes absent
 // (so nothing inherited may supply an index).
 fn movable_across_holes(interp: &Interpreter, b: &JsObjectData) -> bool {
-    b.extensible && proto_chain_index_free(interp, b.prototype_id)
+    b.extensible && proto_chain_index_free(interp, b.proto_id())
 }
 
 fn holes_movable(interp: &Interpreter, b: &JsObjectData, holes: bool) -> bool {
@@ -197,7 +196,7 @@ pub(super) fn try_unshift(
         if !b.extensible || !b.is_plain_dense_array(len) {
             return None;
         }
-        b.prototype_id
+        b.proto_id()
     };
     if !proto_chain_index_free(interp, proto) {
         return None;
@@ -262,7 +261,7 @@ pub(super) fn try_splice(
         // an own present element and no inherited index is consulted.
         let needs_chain =
             items.len() > delete_count || has_hole(&ob.array_elements().unwrap()[start..]);
-        (needs_chain, ob.prototype_id)
+        (needs_chain, ob.proto_id())
     };
     if needs_chain && !proto_chain_index_free(interp, proto) {
         return false;
@@ -316,7 +315,7 @@ pub(super) fn try_slice(
         if ob.properties.len() != 1 || elements.len() < fin {
             return false;
         }
-        (has_hole(&elements[k..fin]), ob.prototype_id)
+        (has_hole(&elements[k..fin]), ob.proto_id())
     };
     if holes && !proto_chain_index_free(interp, proto) {
         return false;
@@ -376,7 +375,7 @@ pub(super) fn try_concat_item(
         if elements.last().is_some_and(JsValue::is_undefined) {
             return false;
         }
-        (has_hole(elements), ib.prototype_id)
+        (has_hole(elements), ib.proto_id())
     };
     if holes && !proto_chain_index_free(interp, proto) {
         return false;
@@ -456,7 +455,7 @@ pub(super) fn try_fill(
         }
         (
             fin > elements.len() || has_hole(&elements[k..fin]),
-            b.prototype_id,
+            b.proto_id(),
         )
     };
     if needs_chain && !proto_chain_index_free(interp, proto) {
