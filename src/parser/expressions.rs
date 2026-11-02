@@ -57,6 +57,8 @@ impl<'a> Parser<'a> {
             return self.parse_yield_expression();
         }
 
+        self.escaped_yield_start()?;
+
         let left_start = self.current_token_start;
         let before = v8_position::snapshot();
         let left = self.parse_conditional_expression()?;
@@ -218,9 +220,8 @@ impl<'a> Parser<'a> {
                 if self.strict && matches!(&expr, Expression::Identifier(_, _)) {
                     return Err(self.error("Delete of an unqualified identifier in strict mode"));
                 }
-                if matches!(&expr, Expression::Member(_, MemberProperty::Private(_), _)) {
-                    return Err(self
-                        .error("Applying the 'delete' operator to a private name is not allowed"));
+                if let Expression::Member(_, MemberProperty::Private(name), _) = &expr {
+                    return Err(self.private_delete_error(name));
                 }
                 Ok(Expression::Delete(ExprBox::new(expr)))
             }
@@ -278,9 +279,7 @@ impl<'a> Parser<'a> {
                 if self.in_async || (self.is_module && self.in_function == 0) =>
             {
                 if self.in_formal_parameters {
-                    return Err(self.error(
-                        "Await expression is not allowed in formal parameters of an async function",
-                    ));
+                    return Err(self.await_in_params());
                 }
                 let at = CallSiteId::at(self.current_token_start).1;
                 v8_position::early_expression(at);
@@ -690,15 +689,11 @@ impl<'a> Parser<'a> {
                 let ident_start = self.current_token_start;
                 // Escaped reserved words are still reserved
                 if Self::is_reserved_identifier(&name, self.strict) {
-                    return Err(
-                        self.error("Keyword must not contain escaped characters".to_string())
-                    );
+                    return Err(self.escaped_reserved_error(&name));
                 }
                 // Escaped "await" and "yield" cannot be used as identifiers
                 if name == "await" || name == "yield" {
-                    return Err(
-                        self.error("Keyword must not contain escaped characters".to_string())
-                    );
+                    return Err(self.escaped_reserved_error(&name));
                 }
                 self.check_strict_identifier(&name)?;
                 self.advance()?;
@@ -827,7 +822,7 @@ impl<'a> Parser<'a> {
                             body_is_strict,
                         ));
                     }
-                    return Err(self.error("Unexpected token )"));
+                    return Err(self.empty_parens_error());
                 }
                 // Check for rest param: (...a) =>
                 if self.current == Token::Ellipsis {
@@ -1047,7 +1042,7 @@ impl<'a> Parser<'a> {
         Ok(Expression::Object(props, trailing_comma_after_spread))
     }
 
-    fn is_method_name_start(token: &Token) -> bool {
+    pub(super) fn is_method_name_start(token: &Token) -> bool {
         matches!(
             token,
             Token::Identifier(_)
@@ -1291,9 +1286,7 @@ impl<'a> Parser<'a> {
             return Err(self.error("Keyword must not contain escaped characters"));
         }
 
-        let is_escaped_reserved = matches!(&self.current, Token::IdentifierWithEscape(name)
-            if Self::is_reserved_identifier(name, self.strict)
-                || name == "await" || name == "yield");
+        let is_escaped_reserved = self.escaped_shorthand_reserved();
         let was_keyword = matches!(&self.current, Token::Keyword(_) | Token::BooleanLiteral(_))
             || self.current == Token::NullLiteral;
 
@@ -1311,11 +1304,11 @@ impl<'a> Parser<'a> {
             && self.current != Token::Assign
         {
             if is_escaped_reserved {
-                return Err(self.error("Keyword must not contain escaped characters"));
+                return Err(self.escaped_shorthand_error(name));
             }
             // Reserved words cannot be used as shorthand IdentifierReferences
             if matches!(name.as_str(), "true" | "false" | "null") {
-                return Err(self.error(format!("Unexpected token '{name}'")));
+                return Err(self.shorthand_keyword(name));
             }
             // Keywords that are not valid IdentifierReferences cannot be shorthand
             if was_keyword {
@@ -1329,7 +1322,7 @@ impl<'a> Parser<'a> {
                     "implements" | "interface" | "package" | "private" | "protected" | "public"
                 );
                 if !is_contextual && !is_strict_reserved {
-                    return Err(self.error(format!("Unexpected token '{n}'")));
+                    return Err(self.shorthand_keyword(n));
                 }
             }
             // await is not a shorthand IdentifierReference in static blocks, async, modules
@@ -1374,7 +1367,7 @@ impl<'a> Parser<'a> {
             && self.current == Token::Assign
         {
             if is_escaped_reserved {
-                return Err(self.error("Keyword must not contain escaped characters"));
+                return Err(self.escaped_shorthand_error(name));
             }
             // Keywords cannot be CoverInitializedName targets
             if was_keyword && Self::is_reserved_identifier(name, self.strict) {
@@ -1382,7 +1375,7 @@ impl<'a> Parser<'a> {
             }
             let ident = name.clone();
             if self.strict && (ident == "eval" || ident == "arguments") {
-                return Err(self.error("Invalid destructuring assignment target"));
+                return Err(self.cover_eval_error());
             }
             self.advance()?; // consume '='
             let default_value = self.parse_assignment_expression()?;

@@ -94,6 +94,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_statement_inner(&mut self) -> Result<Statement, ParseError> {
+        self.escaped_async_statement()?;
         if self.strict && matches!(&self.current, Token::Keyword(Keyword::Function)) {
             return Err(self.error(
                 "In strict mode code, functions can only be declared at top level or inside a block",
@@ -424,7 +425,7 @@ impl<'a> Parser<'a> {
         };
         // §13.6.1: IsLabelledFunction(Statement) must be false in if-statement
         if Self::is_labelled_function(&consequent) {
-            return Err(self.error("In non-strict mode code, functions can only be declared at top level, inside a block, or as the body of an if statement"));
+            return Err(self.non_strict_fn_error());
         }
         let alternate = if self.current == Token::Keyword(Keyword::Else) {
             self.advance()?;
@@ -443,7 +444,7 @@ impl<'a> Parser<'a> {
             } else {
                 let alt = self.parse_statement()?;
                 if Self::is_labelled_function(&alt) {
-                    return Err(self.error("In non-strict mode code, functions can only be declared at top level, inside a block, or as the body of an if statement"));
+                    return Err(self.non_strict_fn_error());
                 }
                 Some(Box::new(alt))
             }
@@ -487,7 +488,7 @@ impl<'a> Parser<'a> {
         self.in_iteration -= 1;
         let body = body?;
         if Self::is_labelled_function(&body) {
-            return Err(self.error("In non-strict mode code, functions can only be declared at top level, inside a block, or as the body of an if statement"));
+            return Err(self.non_strict_fn_error());
         }
         Ok(Box::new(body))
     }
@@ -538,7 +539,7 @@ impl<'a> Parser<'a> {
             let at = CallSiteId::at(self.current_token_start).1;
             let ident = self
                 .current_identifier_name()
-                .ok_or_else(|| self.error("Expected identifier in using declaration"))?;
+                .ok_or_else(|| self.using_binding_error())?;
             self.advance()?;
             if self.current == Token::Keyword(Keyword::Of) {
                 self.advance()?;
@@ -574,7 +575,7 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 let name = self
                     .current_identifier_name()
-                    .ok_or_else(|| self.error("Expected identifier in using declaration"))?;
+                    .ok_or_else(|| self.using_binding_error())?;
                 self.advance()?;
                 if self.current != Token::Assign {
                     return Err(self.using_missing_init(false));
@@ -1022,10 +1023,6 @@ impl<'a> Parser<'a> {
                     if matches!(&expr, Expression::Assign(..)) {
                         return Err(self.error("Invalid left-hand side in for-in loop"));
                     }
-                    self.advance()?;
-                    let right = self.parse_cond()?;
-                    self.eat(&Token::RightParen)?;
-                    let body = self.parse_iteration_body()?;
                     let left = if self.call_target(&expr) {
                         ForInOfLeft::Expression(expr)
                     } else {
@@ -1033,6 +1030,10 @@ impl<'a> Parser<'a> {
                         self.check_strict_assignment_pattern(&pat)?;
                         ForInOfLeft::Pattern(pat)
                     };
+                    self.advance()?;
+                    let right = self.parse_cond()?;
+                    self.eat(&Token::RightParen)?;
+                    let body = self.parse_iteration_body()?;
                     return Ok(Statement::ForIn(Box::new(ForInStatement {
                         left,
                         right,
@@ -1153,7 +1154,7 @@ impl<'a> Parser<'a> {
                 return Err(self.error(format!("Undefined label '{l}'")));
             }
         } else if self.in_iteration == 0 && self.in_switch == 0 {
-            return Err(self.error("Illegal break statement"));
+            return Err(self.jump_error("Illegal break statement"));
         }
         self.eat_semicolon()?;
         Ok(Statement::Break(label, at))
@@ -1171,7 +1172,7 @@ impl<'a> Parser<'a> {
                 _ => {}
             }
         } else if self.in_iteration == 0 {
-            return Err(self.error("Illegal continue statement"));
+            return Err(self.jump_error("Illegal continue statement"));
         }
         self.eat_semicolon()?;
         Ok(Statement::Continue(label))
@@ -1334,7 +1335,7 @@ impl<'a> Parser<'a> {
         loop {
             let name = self
                 .current_identifier_name()
-                .ok_or_else(|| self.error("Expected identifier in using declaration"))?;
+                .ok_or_else(|| self.using_binding_error())?;
             self.advance()?;
             if self.current != Token::Assign {
                 return Err(self.using_missing_init(await_using));

@@ -19,7 +19,7 @@ impl<'a> Parser<'a> {
         Err(self.error("Expected identifier or string"))
     }
 
-    fn has_lone_surrogate(code_units: &[u16]) -> bool {
+    pub(in crate::parser) fn has_lone_surrogate(code_units: &[u16]) -> bool {
         let mut i = 0;
         while i < code_units.len() {
             let cu = code_units[i];

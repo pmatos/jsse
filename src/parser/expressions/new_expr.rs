@@ -20,7 +20,7 @@ impl Parser<'_> {
             let is_target = match &self.current {
                 Token::Identifier(n) => n == "target",
                 Token::IdentifierWithEscape(n) if n == "target" => {
-                    return Err(self.error("Keyword must not contain escaped characters"));
+                    return Err(self.escaped_word_error("new.target"));
                 }
                 _ => false,
             };

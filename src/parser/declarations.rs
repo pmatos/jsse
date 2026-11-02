@@ -289,36 +289,31 @@ impl<'a> Parser<'a> {
                 match kind {
                     PrivateNameKind::Getter => {
                         if getter_static.is_some() || has_other {
-                            return Err(self
-                                .error(format!("Identifier '#{name}' has already been declared")));
+                            return Err(self.duplicate_private_name(&name));
                         }
                         // If there's a setter, staticness must match
                         if let Some(setter_is_static) = setter_static
                             && setter_is_static != is_static
                         {
-                            return Err(self
-                                .error(format!("Identifier '#{name}' has already been declared")));
+                            return Err(self.duplicate_private_name(&name));
                         }
                         entry.0 = Some(is_static);
                     }
                     PrivateNameKind::Setter => {
                         if setter_static.is_some() || has_other {
-                            return Err(self
-                                .error(format!("Identifier '#{name}' has already been declared")));
+                            return Err(self.duplicate_private_name(&name));
                         }
                         // If there's a getter, staticness must match
                         if let Some(getter_is_static) = getter_static
                             && getter_is_static != is_static
                         {
-                            return Err(self
-                                .error(format!("Identifier '#{name}' has already been declared")));
+                            return Err(self.duplicate_private_name(&name));
                         }
                         entry.1 = Some(is_static);
                     }
                     PrivateNameKind::Other => {
                         if getter_static.is_some() || setter_static.is_some() || has_other {
-                            return Err(self
-                                .error(format!("Identifier '#{name}' has already been declared")));
+                            return Err(self.duplicate_private_name(&name));
                         }
                         entry.2 = true;
                     }
@@ -582,6 +577,7 @@ impl<'a> Parser<'a> {
         let method_source_start = self.current_token_start;
 
         // Check for async method (escaped identifiers like \u0061sync don't count as async keyword)
+        self.escaped_async_member()?;
         let is_async_method = matches!(&self.current, Token::Identifier(n) if n == "async")
             || matches!(&self.current, Token::Keyword(Keyword::Async));
         if is_async_method {
@@ -614,7 +610,7 @@ impl<'a> Parser<'a> {
             let is_generator = self.eat_star()?;
             let (key, computed) = self.parse_property_name()?;
             if !is_static && !computed && Self::key_is_constructor(&key) {
-                return Err(self.error("Class constructor may not be an async method"));
+                return Err(self.error(Self::async_ctor_message(is_generator)));
             }
             if is_static && !computed && Self::key_is_prototype(&key) {
                 return Err(self.error("Classes may not have a static property named 'prototype'"));
