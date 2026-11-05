@@ -245,4 +245,4 @@ function validateAttributes(format, target, type) {
   if (format !== 'json') throw new ERR_IMPORT_ATTRIBUTE_TYPE_INCOMPATIBLE(url, 'json');
 }
 
-module.exports = { defaultResolve, detectsEsmSyntax, validateAttributes };
+module.exports = { defaultResolve, detectsEsmSyntax, schemeRegEx, validateAttributes };

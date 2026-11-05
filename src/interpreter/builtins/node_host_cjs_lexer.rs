@@ -380,6 +380,16 @@ impl<'a> Lexer<'a> {
                     self.pos = resume;
                     prev = Prev::Word(word.0, word.1);
                 }
+                b'+' | b'-'
+                    if self.at(self.pos + 1) == c
+                        && matches!(
+                            prev,
+                            Prev::Word(..) | Prev::Value | Prev::CloseParen(_) | Prev::Punct(b']')
+                        ) =>
+                {
+                    self.pos += 2;
+                    prev = Prev::Value;
+                }
                 _ => {
                     self.pos += 1;
                     prev = Prev::Punct(c);
@@ -440,5 +450,22 @@ impl Interpreter {
             },
         ));
         self.install_host_global("__host_cjs_lex", lex);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lex_cjs_names;
+
+    #[test]
+    fn a_slash_after_a_postfix_increment_is_a_division() {
+        for source in [
+            "x = y++ / 2; exports.p = 1; z = /ab+c/g; exports.q = 2",
+            "x = y-- / 2; exports.p = 1; z = /ab+c/g; exports.q = 2",
+            "x = a[0]++ / 2; exports.p = 1; z = /ab+c/g; exports.q = 2",
+            "x = (a)-- / 2; exports.p = 1; z = /ab+c/g; exports.q = 2",
+        ] {
+            assert_eq!(lex_cjs_names(source).exports, ["p", "q"], "{source}");
+        }
     }
 }
