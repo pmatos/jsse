@@ -378,15 +378,13 @@ impl<'a> Lexer<'a> {
                         _ => {}
                     }
                     self.pos = resume;
-                    prev = Prev::Word(word.0, word.1);
+                    prev = if dotted {
+                        Prev::Value
+                    } else {
+                        Prev::Word(word.0, word.1)
+                    };
                 }
-                b'+' | b'-'
-                    if self.at(self.pos + 1) == c
-                        && matches!(
-                            prev,
-                            Prev::Word(..) | Prev::Value | Prev::CloseParen(_) | Prev::Punct(b']')
-                        ) =>
-                {
+                b'+' | b'-' if self.at(self.pos + 1) == c && !self.regex_allowed(prev) => {
                     self.pos += 2;
                     prev = Prev::Value;
                 }
@@ -457,15 +455,20 @@ impl Interpreter {
 mod tests {
     use super::lex_cjs_names;
 
+    fn assert_slash_is_division(operands: &[&str]) {
+        for operand in operands {
+            let source = format!("x = {operand} / 2; exports.p = 1; z = /ab'c+/g; exports.q = 2");
+            assert_eq!(lex_cjs_names(&source).exports, ["p", "q"], "{source}");
+        }
+    }
+
     #[test]
     fn a_slash_after_a_postfix_increment_is_a_division() {
-        for source in [
-            "x = y++ / 2; exports.p = 1; z = /ab+c/g; exports.q = 2",
-            "x = y-- / 2; exports.p = 1; z = /ab+c/g; exports.q = 2",
-            "x = a[0]++ / 2; exports.p = 1; z = /ab+c/g; exports.q = 2",
-            "x = (a)-- / 2; exports.p = 1; z = /ab+c/g; exports.q = 2",
-        ] {
-            assert_eq!(lex_cjs_names(source).exports, ["p", "q"], "{source}");
-        }
+        assert_slash_is_division(&["y++", "y--", "a[0]++", "(a)--"]);
+    }
+
+    #[test]
+    fn a_slash_after_a_keyword_named_property_is_a_division() {
+        assert_slash_is_division(&["o.in", "s.return"]);
     }
 }
