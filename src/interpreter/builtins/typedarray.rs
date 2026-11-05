@@ -3772,21 +3772,16 @@ impl Interpreter {
                 let obj_ref = obj.borrow();
                 if let Some(dv) = obj_ref.data_view_info() {
                     if dv.is_detached.get() {
-                        return Completion::Throw(
-                            interp.create_type_error("DataView buffer is detached"),
-                        );
+                        return Completion::Normal(JsValue::number(0.0));
                     }
                     let buf_len = buffer_len(&dv.buffer);
-                    if dv.is_length_tracking {
-                        if dv.byte_offset > buf_len {
-                            return Completion::Throw(
-                                interp.create_type_error("DataView is out of bounds"),
-                            );
-                        }
-                    } else if dv.byte_offset + dv.byte_length > buf_len {
-                        return Completion::Throw(
-                            interp.create_type_error("DataView is out of bounds"),
-                        );
+                    let out_of_bounds = if dv.is_length_tracking {
+                        dv.byte_offset > buf_len
+                    } else {
+                        dv.byte_offset + dv.byte_length > buf_len
+                    };
+                    if out_of_bounds {
+                        return Completion::Normal(JsValue::number(0.0));
                     }
                     return Completion::Normal(JsValue::number(dv.byte_offset as f64));
                 }
@@ -3801,28 +3796,21 @@ impl Interpreter {
                 let obj_ref = obj.borrow();
                 if let Some(dv) = obj_ref.data_view_info() {
                     if dv.is_detached.get() {
-                        return Completion::Throw(
-                            interp.create_type_error("DataView buffer is detached"),
-                        );
+                        return Completion::Normal(JsValue::number(0.0));
                     }
                     let buf_len = buffer_len(&dv.buffer);
                     if dv.is_length_tracking {
                         if dv.byte_offset > buf_len {
-                            return Completion::Throw(
-                                interp.create_type_error("DataView is out of bounds"),
-                            );
+                            return Completion::Normal(JsValue::number(0.0));
                         }
                         return Completion::Normal(JsValue::number(
                             (buf_len - dv.byte_offset) as f64,
                         ));
-                    } else {
-                        if dv.byte_offset + dv.byte_length > buf_len {
-                            return Completion::Throw(
-                                interp.create_type_error("DataView is out of bounds"),
-                            );
-                        }
-                        return Completion::Normal(JsValue::number(dv.byte_length as f64));
                     }
+                    if dv.byte_offset + dv.byte_length > buf_len {
+                        return Completion::Normal(JsValue::number(0.0));
+                    }
+                    return Completion::Normal(JsValue::number(dv.byte_length as f64));
                 }
             }
             Completion::Throw(interp.create_type_error("not a DataView"))
