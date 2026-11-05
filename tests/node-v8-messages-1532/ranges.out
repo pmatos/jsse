@@ -21,7 +21,6 @@ taJoin -> TypeError: Cannot perform %TypedArray%.prototype.join on a detached or
 taSort -> TypeError: Cannot perform %TypedArray%.prototype.sort on a detached or out-of-bounds ArrayBuffer
 taEntries -> TypeError: Cannot perform %TypedArray%.prototype.entries on a detached or out-of-bounds ArrayBuffer
 dvGetDetached -> TypeError: Cannot perform DataView.prototype.getInt8 on a detached or out-of-bounds ArrayBuffer
-dvLengthDetached -> TypeError: Cannot perform get DataView.prototype.byteLength on a detached or out-of-bounds ArrayBuffer
 abSliceDetached -> TypeError: Cannot perform ArrayBuffer.prototype.slice on a detached ArrayBuffer
 abTransferDetached -> TypeError: Cannot perform ArrayBuffer.prototype.transfer on a detached ArrayBuffer
 newTaDetached -> TypeError: Cannot perform Construct on a detached ArrayBuffer

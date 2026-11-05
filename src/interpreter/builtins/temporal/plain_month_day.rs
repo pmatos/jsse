@@ -107,7 +107,8 @@ fn read_pmd_property_bag_raw(
         other => return Err(other),
     };
     let year_opt = if !is_undefined(&y_val) {
-        Some(to_integer_with_truncation(interp, &y_val)? as i32)
+        let y = to_integer_with_truncation(interp, &y_val)?;
+        Some((if cal == "iso8601" { y % 400.0 } else { y }) as i32)
     } else {
         None
     };
@@ -310,11 +311,9 @@ fn to_temporal_plain_month_day(
             Completion::Normal(v) => v,
             other => return Err(other),
         };
-        let _y = if !is_undefined(&y_val) {
-            Some(to_integer_with_truncation(interp, &y_val)? as i32)
-        } else {
-            None
-        };
+        if !is_undefined(&y_val) {
+            to_integer_with_truncation(interp, &y_val)?;
+        }
         let m = if let Some(ref mc) = mc_str {
             match super::plain_date::month_code_to_number_pub(mc) {
                 Some(n) => {
@@ -340,8 +339,7 @@ fn to_temporal_plain_month_day(
                 interp.create_type_error("month or monthCode is required"),
             ));
         };
-        let d = d_f as u8;
-        Ok((m, d, 1972, cal))
+        Ok((m, d_f as u8, 1972, cal))
     } else if let Some(s) = item.as_string() {
         let parsed = match parse_temporal_month_day_string(&s.to_rust_string()) {
             Some(v) => v,

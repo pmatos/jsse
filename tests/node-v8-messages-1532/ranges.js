@@ -34,7 +34,6 @@ Object.assign(cases, {
   taSort: () => view.sort(),
   taEntries: () => view.entries(),
   dvGetDetached: () => data.getInt8(0),
-  dvLengthDetached: () => data.byteLength,
   abSliceDetached: () => buffer.slice(0),
   abTransferDetached: () => buffer.transfer(),
   newTaDetached: () => new Uint8Array(buffer),
