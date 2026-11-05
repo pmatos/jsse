@@ -22,8 +22,12 @@ permissions:
 jobs:
   sonarcloud:
     name: SonarCloud analysis
-    # SONAR_TOKEN is unavailable to fork PRs; skip instead of failing.
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    # SONAR_TOKEN is unavailable to fork PRs and to Dependabot PRs (which read
+    # the separate Dependabot secret store); skip instead of failing.
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login != 'dependabot[bot]')
     runs-on: ubuntu-26.04
     steps:
       # Full history for blame/new-code detection. No submodules: the
