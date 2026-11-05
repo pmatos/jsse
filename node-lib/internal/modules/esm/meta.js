@@ -10,9 +10,7 @@ const {
 
 const path = require('path');
 const { canBeRequiredByUsers } = require('internal/modules/builtins');
-const { defaultResolve } = require('internal/modules/esm/resolve');
-
-const schemeRegEx = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
+const { defaultResolve, schemeRegEx } = require('internal/modules/esm/resolve');
 
 function createResolve(filename) {
   // parentURL is ignored; it only gives the function Node's length of 2.

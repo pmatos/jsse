@@ -385,10 +385,6 @@ E('ERR_PACKAGE_PATH_NOT_EXPORTED', Error, (pkgPath, subpath, base = undefined) =
   return `Package subpath '${subpath}' is not defined by "exports" in ${pkgPath}package.json${base ? ` imported from ${base}` : ''}`;
 });
 
-E('ERR_REQUIRE_ESM', Error, (filename) => {
-  return `require() of ES Module ${filename} not supported: ES modules cannot be loaded by require() in jsse yet.`;
-});
-
 require('internal/errors/require_esm')(E);
 require('internal/errors/webstreams')(E, codes);
 
