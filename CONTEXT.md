@@ -149,20 +149,22 @@ The degraded fallback for a `yield`/`yield*` the transform leaves inside an expr
 _Avoid_: replay yield, fallback yield.
 
 **Terminator Operand**:
-An expression a `StateTerminator` carries and the state-machine driver evaluates
-down to a single value — a `ConditionalGoto` condition, a `SwitchDispatch`
-discriminant or case test, a `ForOfInit` iterable, or a `Yield`/`Await`/`Return`/
-`Throw` operand. The three drivers (sync generator, async generator,
-`async_function_resume`) share one reading of what the evaluation produced, via
-`eval_operand` and the `Operand` enum (`interpreter/eval/operand.rs`):
-`Value` / `Throw` / `Suspend` / `Abort` / `Other`. `Abort` carries only
-`Completion::Exit`, which every driver must tear down on and propagate verbatim;
-`Other` carries `Return`/`Break`/`Continue`/`Empty`, where the drivers
-legitimately differ. Routing a throw and the per-driver teardown stay with each
-driver — they need its locals and resolve by `continue`/`return` out of its state
-loop — so what the seam owns is the classification, the part that had no business
-differing.
+An expression carried by a `StateTerminator` (condition, case, iterable or
+yield/await/return/throw operand). `eval_operand` / `Operand`
+(`eval/operand.rs`) classify its evaluation for all three drivers as `Value`,
+`Throw`, `Suspend`, `Abort` (only `Exit`) or `Other`
+(`Return`/`Break`/`Continue`/`Empty`). Drivers retain routing and teardown;
+`Abort` must propagate verbatim.
 _Avoid_: terminator expression, operand completion, state operand.
+
+**Iteration Value Binding**:
+`bind_loop_head` (`exec/loop_targets.rs`) owns per-value declaration/assignment
+dispatch, binding kind, resource registration and roots. `LoopHeadContext`
+preserves ordinary outer/iteration and lowered declaration/assignment
+environments. Drivers retain publication, suspension, disposal and IteratorClose.
+VM complex heads share pattern execution; native simple stores and catch remain
+distinct.
+_Avoid_: loop driver, head environment scope.
 
 **Generator Retirement**:
 The transition a generator object makes when it is finished and nothing will

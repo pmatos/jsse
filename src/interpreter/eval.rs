@@ -3,6 +3,7 @@ use crate::ast::{CallSiteId, PropSiteId};
 use crate::interpreter::builtins::node_host_private::PrivateAccess;
 use crate::interpreter::bytecode::chunk::Chunk;
 use crate::interpreter::bytecode::{BytecodeCacheState, vm};
+use crate::interpreter::exec::LoopHeadContext;
 use crate::interpreter::generator_analysis::block_has_await_using;
 use crate::interpreter::generator_transform::{GeneratorStateMachine, StateMachineKind};
 use crate::interpreter::literal_frame::{CallShape, CompiledCall, LiteralFrame, NamedParamPlan};
@@ -9073,50 +9074,14 @@ impl Interpreter {
                             } else {
                                 outer_env
                             };
-                            let bind_result = match left {
-                                ForInOfLeft::Variable(decl) => {
-                                    let is_using =
-                                        matches!(decl.kind, VarKind::Using | VarKind::AwaitUsing);
-                                    if is_using {
-                                        let hint =
-                                            crate::interpreter::types::DisposeHint::for_var_kind(
-                                                decl.kind,
-                                            );
-                                        if let Err(e) =
-                                            self.add_disposable_resource(&bind_env, &value, hint)
-                                        {
-                                            pending_exception = Some(e);
-                                            continue;
-                                        }
-                                    }
-                                    if let Some(d) = decl.declarations.first() {
-                                        match self.bind_head(
-                                            &d.pattern,
-                                            value,
-                                            match decl.kind {
-                                                VarKind::Var => BindingKind::Var,
-                                                VarKind::Let => BindingKind::Let,
-                                                VarKind::Const
-                                                | VarKind::Using
-                                                | VarKind::AwaitUsing => BindingKind::Const,
-                                            },
-                                            &bind_env,
-                                        ) {
-                                            Completion::Throw(e) => Err(e),
-                                            _ => Ok(()),
-                                        }
-                                    } else {
-                                        Ok(())
-                                    }
-                                }
-                                ForInOfLeft::Pattern(_) | ForInOfLeft::Expression(_) => {
-                                    match self.assign_to_for_left(left, value, &bind_env) {
-                                        Completion::Throw(e) => Err(e),
-                                        _ => Ok(()),
-                                    }
-                                }
-                            };
-                            if let Err(e) = bind_result {
+                            if let Completion::Throw(e) = self.bind_loop_head(
+                                left,
+                                value,
+                                LoopHeadContext::Lowered {
+                                    declaration: &bind_env,
+                                    assignment: &bind_env,
+                                },
+                            ) {
                                 pending_exception = Some(e);
                                 continue;
                             }
