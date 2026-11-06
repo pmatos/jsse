@@ -6,6 +6,7 @@ use std::borrow::Cow;
 mod dispose_resources;
 mod eval_body;
 mod loop_targets;
+pub(super) use loop_targets::LoopHeadContext;
 mod try_clauses;
 mod variable_declaration;
 
@@ -2002,74 +2003,18 @@ impl Interpreter {
                     }
                     let key_val = JsValue::string(key.to_js_string());
                     let for_env = Self::iteration_env(shared_env.as_ref(), env);
-                    match &fi.left {
-                        ForInOfLeft::Variable(decl) => {
-                            let kind = match decl.kind {
-                                VarKind::Var => BindingKind::Var,
-                                VarKind::Let => BindingKind::Let,
-                                VarKind::Const | VarKind::Using | VarKind::AwaitUsing => {
-                                    BindingKind::Const
-                                }
-                            };
-                            let bind_env = if decl.kind == VarKind::Var {
-                                env
-                            } else {
-                                &for_env
-                            };
-                            if let Some((atom, binding_kind)) = &head_binding {
-                                for_env.borrow_mut().bindings.push_unique(
-                                    atom.clone(),
-                                    Binding::new(key_val, *binding_kind, true),
-                                );
-                            } else if let Some(d) = decl.declarations.first() {
-                                match self.bind_pattern(&d.pattern, key_val, kind, bind_env) {
-                                    Completion::Normal(_) => {}
-                                    other => break 'unroot other,
-                                }
-                            }
-                        }
-                        ForInOfLeft::Pattern(pat) => match pat {
-                            Pattern::Identifier(name) => {
-                                if let Err(e) =
-                                    self.assign_loop_identifier_target(name, key_val, env)
-                                {
-                                    break 'unroot Completion::Throw(e);
-                                }
-                            }
-                            Pattern::MemberExpression(expr) => {
-                                if let Err(e) = self.assign_to_expr(expr, key_val, env) {
-                                    break 'unroot Completion::Throw(e);
-                                }
-                            }
-                            // A destructuring assignment target: its names are
-                            // existing bindings, not new ones of the loop's scope.
-                            _ => match self.assign_to_for_pattern(pat, key_val, env) {
-                                Completion::Normal(_) | Completion::Empty => {}
-                                other => break 'unroot other,
-                            },
+                    match self.bind_loop_head(
+                        &fi.left,
+                        key_val,
+                        LoopHeadContext::ForIn {
+                            outer: env,
+                            iteration: &for_env,
+                            simple: head_binding.as_ref(),
                         },
-                        ForInOfLeft::Expression(expr) => {
-                            match expr {
-                                Expression::Identifier(_, _) => {
-                                    if let Err(e) = self.assign_to_expr(expr, key_val, env) {
-                                        break 'unroot Completion::Throw(e);
-                                    }
-                                }
-                                Expression::Member(..) => {
-                                    if let Err(e) = self.assign_to_expr(expr, key_val, env) {
-                                        break 'unroot Completion::Throw(e);
-                                    }
-                                }
-                                _ => {
-                                    // Evaluate for side effects, then throw ReferenceError
-                                    match self.eval_expr(expr, env) {
-                                        Completion::Normal(_) => {}
-                                        other => break 'unroot other,
-                                    }
-                                    break 'unroot Completion::Throw(self.invalid_for_target("in"));
-                                }
-                            }
-                        }
+                    ) {
+                        Completion::Normal(_) => {}
+                        Completion::Empty if matches!(&fi.left, ForInOfLeft::Pattern(_)) => {}
+                        other => break 'unroot other,
                     }
                     let result = self.exec_statement(&fi.body, &for_env);
                     match handle_loop_body_completion(result, &mut v, label) {
@@ -2274,71 +2219,22 @@ impl Interpreter {
             };
 
             let for_env = Self::iteration_env(shared_env, env);
-            match &fo.left {
-                ForInOfLeft::Variable(decl) => {
-                    let is_using = matches!(decl.kind, VarKind::Using | VarKind::AwaitUsing);
-                    let kind = match decl.kind {
-                        VarKind::Var => BindingKind::Var,
-                        VarKind::Let => BindingKind::Let,
-                        VarKind::Const | VarKind::Using | VarKind::AwaitUsing => BindingKind::Const,
-                    };
-                    let bind_env = if decl.kind == VarKind::Var {
-                        env
-                    } else {
-                        &for_env
-                    };
-                    if is_using {
-                        let hint = DisposeHint::for_var_kind(decl.kind);
-                        if let Err(e) = self.add_disposable_resource(bind_env, &val, hint) {
-                            self.iterator_close(iterator, e.clone());
-                            return Completion::Throw(e);
-                        }
-                    }
-                    if let Some((atom, binding_kind)) = &head_binding {
-                        for_env
-                            .borrow_mut()
-                            .bindings
-                            .push_unique(atom.clone(), Binding::new(val, *binding_kind, true));
-                    } else if let Some(d) = decl.declarations.first() {
-                        match self.bind_head(&d.pattern, val, kind, bind_env) {
-                            Completion::Normal(_) => {}
-                            Completion::Throw(e) => {
-                                self.iterator_close(iterator, e.clone());
-                                return Completion::Throw(e);
-                            }
-                            other => return other,
-                        }
-                    }
+            match self.bind_loop_head(
+                &fo.left,
+                val,
+                LoopHeadContext::ForOf {
+                    outer: env,
+                    iteration: &for_env,
+                    simple: head_binding.as_ref(),
+                },
+            ) {
+                Completion::Normal(_) => {}
+                Completion::Empty if matches!(&fo.left, ForInOfLeft::Pattern(_)) => {}
+                Completion::Throw(e) => {
+                    self.iterator_close(iterator, e.clone());
+                    return Completion::Throw(e);
                 }
-                ForInOfLeft::Pattern(pat) => match self.assign_to_for_pattern(pat, val, env) {
-                    Completion::Normal(_) | Completion::Empty => {}
-                    Completion::Throw(e) => {
-                        self.iterator_close(iterator, e.clone());
-                        return Completion::Throw(e);
-                    }
-                    other => return other,
-                },
-                ForInOfLeft::Expression(expr) => match expr {
-                    Expression::Identifier(_, _) | Expression::Member(..) => {
-                        if let Err(e) = self.assign_to_expr(expr, val, env) {
-                            self.iterator_close(iterator, e.clone());
-                            return Completion::Throw(e);
-                        }
-                    }
-                    _ => {
-                        match self.eval_expr(expr, env) {
-                            Completion::Normal(_) => {}
-                            Completion::Throw(e) => {
-                                self.iterator_close(iterator, e.clone());
-                                return Completion::Throw(e);
-                            }
-                            other => return other,
-                        }
-                        let e = self.invalid_for_target("of");
-                        self.iterator_close(iterator, e.clone());
-                        return Completion::Throw(e);
-                    }
-                },
+                other => return other,
             }
             // A `return f()` in the body leaves the loop through IteratorClose, so
             // the call is not in tail position (HasCallInTailPosition has no

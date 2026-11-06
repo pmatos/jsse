@@ -2054,66 +2054,24 @@ impl Interpreter {
                                 outer_env
                             };
 
-                            match left {
-                                ForInOfLeft::Variable(decl) => {
-                                    let kind = match decl.kind {
-                                        VarKind::Var => crate::interpreter::types::BindingKind::Var,
-                                        VarKind::Let => crate::interpreter::types::BindingKind::Let,
-                                        VarKind::Const | VarKind::Using | VarKind::AwaitUsing => {
-                                            crate::interpreter::types::BindingKind::Const
-                                        }
-                                    };
-                                    if matches!(decl.kind, VarKind::Using | VarKind::AwaitUsing) {
-                                        let hint = DisposeHint::for_var_kind(decl.kind);
-                                        if let Err(e) =
-                                            self.add_disposable_resource(&bind_env, &val, hint)
-                                        {
-                                            self.iterator_close(&iterator, e.clone());
-                                            self.discard_failed_generator_for_of_loop(
-                                                o.id,
-                                                &mut for_of_stack,
-                                                loop_pos,
-                                                &iterator,
-                                            );
-                                            let e = route_exception!(e);
-                                            self.retire_generator(o.id);
-                                            return Completion::Throw(e);
-                                        }
-                                    }
-                                    if let Some(d) = decl.declarations.first()
-                                        && let Completion::Throw(e) =
-                                            self.bind_head(&d.pattern, val, kind, &bind_env)
-                                    {
-                                        self.iterator_close(&iterator, e.clone());
-                                        self.discard_failed_generator_for_of_loop(
-                                            o.id,
-                                            &mut for_of_stack,
-                                            loop_pos,
-                                            &iterator,
-                                        );
-                                        let e = route_exception!(e);
-                                        self.retire_generator(o.id);
-                                        return Completion::Throw(e);
-                                    }
-                                }
-                                ForInOfLeft::Pattern(_) | ForInOfLeft::Expression(_) => {
-                                    match self.assign_to_for_left(left, val, &term_env) {
-                                        Completion::Normal(_) | Completion::Empty => {}
-                                        Completion::Throw(e) => {
-                                            self.iterator_close(&iterator, e.clone());
-                                            self.discard_failed_generator_for_of_loop(
-                                                o.id,
-                                                &mut for_of_stack,
-                                                loop_pos,
-                                                &iterator,
-                                            );
-                                            let e = route_exception!(e);
-                                            self.retire_generator(o.id);
-                                            return Completion::Throw(e);
-                                        }
-                                        _other => {}
-                                    }
-                                }
+                            if let Completion::Throw(e) = self.bind_loop_head(
+                                left,
+                                val,
+                                LoopHeadContext::Lowered {
+                                    declaration: &bind_env,
+                                    assignment: &term_env,
+                                },
+                            ) {
+                                self.iterator_close(&iterator, e.clone());
+                                self.discard_failed_generator_for_of_loop(
+                                    o.id,
+                                    &mut for_of_stack,
+                                    loop_pos,
+                                    &iterator,
+                                );
+                                let e = route_exception!(e);
+                                self.retire_generator(o.id);
+                                return Completion::Throw(e);
                             }
                             self.push_pending_iter_close(iterator);
                             current_id = *body_state;
@@ -5235,66 +5193,23 @@ impl Interpreter {
                                 outer_env
                             };
 
-                            match left {
-                                ForInOfLeft::Variable(decl) => {
-                                    let kind = match decl.kind {
-                                        VarKind::Var => crate::interpreter::types::BindingKind::Var,
-                                        VarKind::Let => crate::interpreter::types::BindingKind::Let,
-                                        VarKind::Const | VarKind::Using | VarKind::AwaitUsing => {
-                                            crate::interpreter::types::BindingKind::Const
-                                        }
-                                    };
-                                    if matches!(decl.kind, VarKind::Using | VarKind::AwaitUsing) {
-                                        let hint = DisposeHint::for_var_kind(decl.kind);
-                                        if let Err(e) =
-                                            self.add_disposable_resource(&bind_env, &val, hint)
-                                        {
-                                            self.iterator_close(&iterator, e.clone());
-                                            self.discard_failed_generator_for_of_loop(
-                                                o.id,
-                                                &mut for_of_stack,
-                                                loop_pos,
-                                                &iterator,
-                                            );
-                                            let e = route_exception!(e);
-                                            return self
-                                                .reject_async_generator_request(o.id, promise, e);
-                                        }
-                                    }
-                                    if let Some(d) = decl.declarations.first()
-                                        && let Completion::Throw(e) =
-                                            self.bind_head(&d.pattern, val, kind, &bind_env)
-                                    {
-                                        self.iterator_close(&iterator, e.clone());
-                                        self.discard_failed_generator_for_of_loop(
-                                            o.id,
-                                            &mut for_of_stack,
-                                            loop_pos,
-                                            &iterator,
-                                        );
-                                        let e = route_exception!(e);
-                                        return self
-                                            .reject_async_generator_request(o.id, promise, e);
-                                    }
-                                }
-                                ForInOfLeft::Pattern(_) | ForInOfLeft::Expression(_) => {
-                                    match self.assign_to_for_left(left, val, &term_env) {
-                                        Completion::Normal(_) | Completion::Empty => {}
-                                        Completion::Throw(e) => {
-                                            self.iterator_close(&iterator, e.clone());
-                                            self.discard_failed_generator_for_of_loop(
-                                                o.id,
-                                                &mut for_of_stack,
-                                                loop_pos,
-                                                &iterator,
-                                            );
-                                            let e = route_exception!(e);
-                                            return self
-                                                .reject_async_generator_request(o.id, promise, e);
-                                        }
-                                        _other => {}
-                                    }
-                                }
+                            if let Completion::Throw(e) = self.bind_loop_head(
+                                left,
+                                val,
+                                LoopHeadContext::Lowered {
+                                    declaration: &bind_env,
+                                    assignment: &term_env,
+                                },
+                            ) {
+                                self.iterator_close(&iterator, e.clone());
+                                self.discard_failed_generator_for_of_loop(
+                                    o.id,
+                                    &mut for_of_stack,
+                                    loop_pos,
+                                    &iterator,
+                                );
+                                let e = route_exception!(e);
+                                return self.reject_async_generator_request(o.id, promise, e);
                             }
                             self.push_pending_iter_close(iterator);
                             current_id = *body_state;

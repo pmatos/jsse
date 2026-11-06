@@ -10,7 +10,6 @@
 
 use super::super::*;
 use super::node_host_param_patterns::PatternKind;
-use crate::interpreter::bytecode::chunk::HeadBinding;
 use std::rc::Rc;
 
 /// What a pattern binding's initializer reads as in V8's messages.
@@ -117,21 +116,6 @@ impl Interpreter {
             return self.bind_pattern(pattern, value, kind, env);
         }
         self.with_pattern_origin(origin, |i| i.bind_pattern(pattern, value, kind, env))
-    }
-
-    /// Store one iteration value (or a `catch` argument) through a head
-    /// binding the bytecode compiler left to the tree-walker.
-    pub(crate) fn bind_head_binding(
-        &mut self,
-        head: &HeadBinding,
-        value: JsValue,
-        env: &EnvRef,
-    ) -> Completion {
-        match head {
-            HeadBinding::Declare { pattern, kind } => self.bind_head(pattern, value, *kind, env),
-            HeadBinding::Catch { pattern } => self.bind_catch(pattern, value, env),
-            HeadBinding::Assign { pattern } => self.assign_to_for_pattern(pattern, value, env),
-        }
     }
 
     /// Where `pattern` sits among the patterns open at this call depth, when
