@@ -64,12 +64,19 @@ impl<'a> CaptureWalk<'a> {
         params: &'a [Pattern],
         body: &'a [Statement],
     ) -> NestedMentions<'a> {
+        Self::nested_mentions_of(|outer| {
+            params.iter().for_each(|p| outer.push_pattern(p));
+            body.iter().for_each(|s| outer.push_stmt(s));
+        })
+    }
+
+    /// [`nested_mentions`](Self::nested_mentions) for whatever `seed` pushes.
+    pub(crate) fn nested_mentions_of(seed: impl FnOnce(&mut Self)) -> NestedMentions<'a> {
         let mut outer = CaptureWalk {
             mode: WalkMode::Record,
             ..CaptureWalk::default()
         };
-        params.iter().for_each(|p| outer.push_pattern(p));
-        body.iter().for_each(|s| outer.push_stmt(s));
+        seed(&mut outer);
         outer.run();
         let mut names = Vec::new();
         let mut opaque = outer.opaque;
