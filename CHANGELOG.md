@@ -1,3 +1,36 @@
+# [0.14.0](https://github.com/pmatos/jsse/compare/v0.13.0...v0.14.0) (2026-11-08)
+
+
+### Bug Fixes
+
+* **node-host:** match the four-field Assign on main ([#1562](https://github.com/pmatos/jsse/issues/1562)) ([29008fd](https://github.com/pmatos/jsse/commit/29008fdb0d1cdb271c2f1339ce9ddf4ecfd2523b))
+* **node-host:** report entry module parse and link errors like node ([#1569](https://github.com/pmatos/jsse/issues/1569)) ([1502f2c](https://github.com/pmatos/jsse/commit/1502f2c295f0c4f8f0f1922b0756617a3684318d))
+* **node-host:** report yield*, declaration and break positions in async frames ([#1563](https://github.com/pmatos/jsse/issues/1563)) ([7552775](https://github.com/pmatos/jsse/commit/7552775494ef114ce1b3d1d44bdb260ed3b2b02f))
+* **node-host:** treat a slash after a postfix ++ or -- as division in the CJS lexer ([#1589](https://github.com/pmatos/jsse/issues/1589)) ([3b335be](https://github.com/pmatos/jsse/commit/3b335be407fa5e3934d0d09b13063f59b21f7516))
+* **parser:** reject stray CoverInitializedName and bodiless class methods ([#1574](https://github.com/pmatos/jsse/issues/1574)) ([e360211](https://github.com/pmatos/jsse/commit/e36021143d63374913000e6c24547b06aa056948))
+
+
+### Features
+
+* **node-host:** match v8 destructuring, iteration, callee and builtin wording under --node ([#1561](https://github.com/pmatos/jsse/issues/1561)) ([4f46711](https://github.com/pmatos/jsse/commit/4f467113d1babc8ded971ffc31d72a45bab52518))
+* **node-host:** match V8 import() positions and iteration error wording ([#1578](https://github.com/pmatos/jsse/issues/1578)) ([73f192d](https://github.com/pmatos/jsse/commit/73f192da5d832ee25bd28924aef640c150debab9))
+* **node-host:** match V8 wording of iteration operands, parameter patterns and builtins ([#1565](https://github.com/pmatos/jsse/issues/1565)) ([796d412](https://github.com/pmatos/jsse/commit/796d412dd0febadfad2df82b61d7d3203d807fdc))
+* **node-host:** report V8 positions of const assignment and nullish compound targets ([#1560](https://github.com/pmatos/jsse/issues/1560)) ([ff28eff](https://github.com/pmatos/jsse/commit/ff28eff77ecaa87153f7233d78693e4cc71f3316))
+* **node-host:** report V8 positions of destructuring, for-of, spread and parameter errors ([#1570](https://github.com/pmatos/jsse/issues/1570)) ([4e13b11](https://github.com/pmatos/jsse/commit/4e13b11f79bd268cf4be81d580f180c04e2f51e4))
+* **node-host:** report V8 positions of statements and identifiers under --node ([#1576](https://github.com/pmatos/jsse/issues/1576)) ([38df579](https://github.com/pmatos/jsse/commit/38df5794c77133e3939ab641fa8bb45ee5986444))
+* **node-host:** word destructuring, let, module and regexp errors like v8 under --node ([#1564](https://github.com/pmatos/jsse/issues/1564)) ([ed0e194](https://github.com/pmatos/jsse/commit/ed0e194edf82d19fffe44d957e8dad7d2ab73db1))
+* **node-host:** word for-await, yield*, defaults and Intl receivers like v8 under --node ([#1573](https://github.com/pmatos/jsse/issues/1573)) ([011aadc](https://github.com/pmatos/jsse/commit/011aadc66072b675d44c1d3e3fabae8f9015ca4b))
+* **node-host:** word residual early errors like v8, accept strict call targets ([#1577](https://github.com/pmatos/jsse/issues/1577)) ([5e52ef8](https://github.com/pmatos/jsse/commit/5e52ef8eed7c44587a9ccf9d5000fa78eddab5f6))
+* **node-host:** word the long tail of early errors like v8 ([#1523](https://github.com/pmatos/jsse/issues/1523)) ([#1579](https://github.com/pmatos/jsse/issues/1579)) ([931ba13](https://github.com/pmatos/jsse/commit/931ba13c510c9342edc92e460ffd3a5e25f05ab5))
+
+
+### Performance Improvements
+
+* **gc:** prefetch dead nursery objects in the minor sweep and keep the nursery at 4 MiB ([#1581](https://github.com/pmatos/jsse/issues/1581)) ([5a4f8dc](https://github.com/pmatos/jsse/commit/5a4f8dcdfe77b6f873d37daa0acd963277534538))
+* **gc:** release bindings no closure names when a call returns ([#1559](https://github.com/pmatos/jsse/issues/1559)) ([9bb21a8](https://github.com/pmatos/jsse/commit/9bb21a875bacacf36884b06be0bfd8d60d51a5ab))
+* **gc:** visit only written environments at a minor collection ([#1575](https://github.com/pmatos/jsse/issues/1575)) ([5e4ac01](https://github.com/pmatos/jsse/commit/5e4ac01dd89b5ebc2ca0c54a0c72b96ed093aa2f))
+* **memory:** shrink object blocks and AST nodes, tsc self-compile peak RSS ([#1580](https://github.com/pmatos/jsse/issues/1580)) ([dd0846d](https://github.com/pmatos/jsse/commit/dd0846d37c47d4966dc8367066c894c6e342e9e7))
+
 # [0.13.0](https://github.com/pmatos/jsse/compare/v0.12.0...v0.13.0) (2026-11-01)
 
 
