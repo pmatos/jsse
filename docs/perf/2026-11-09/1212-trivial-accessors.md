@@ -1,6 +1,6 @@
 # #1212: class getter/setter calls
 
-Base `b2d977b0`, buildbox3 (load about 2), all engines pinned to one core, 9 interleaved
+Base `b2d977b0`, patched = this commit, buildbox3 (load about 2), all engines pinned to one core, 9 interleaved
 runs, fat-LTO release builds (nightly), Boa HEAD `64c209f1`. Wall median in ms
 (min-max).
 
@@ -10,6 +10,8 @@ runs, fat-LTO release builds (nightly), Boa HEAD `64c209f1`. Wall median in ms
 | same loop inside a function | 788 | 304 | 696 | 1.13 | 0.44 |
 | accessor bodies that do more than `this.x` (`this._x + 0`) | 817 | 721 | 750 | 1.09 | 0.96 |
 | `proxy-classes/proxy_ownkeys_has` | 1261 | 1262 | 1107 | 1.14 | 1.14 |
+| control: `proxy-classes/public_access` (no accessors) | 342 | 346 | 493 | 0.69 | 0.70 |
+| control: `bench_object.js` (no accessors) | 345 | 342 | 477 | 0.72 | 0.72 |
 
 The Proxy `ownKeys`/`has` row is a different path (trap dispatch) and is untouched.
 
