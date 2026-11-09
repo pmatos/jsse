@@ -8,6 +8,8 @@ impl ForStatement {
     /// A `let`/`const` head is observed only through its own names, so a loop
     /// whose functions and classes mention none of them (shadowing ignored)
     /// and that has no direct `eval` or `with` cannot tell the copies apart.
+    /// Callers ask only about loops with such a head; any other head has no
+    /// bindings to observe and the verdict is whether `eval`/`with` is present.
     pub(super) fn capture_verdict(&self) -> bool {
         let mut head_names = Vec::new();
         if let Some(ForInit::Variable(decl)) = &self.init
@@ -16,14 +18,6 @@ impl ForStatement {
             for declarator in &decl.declarations {
                 declarator.pattern.bound_names(&mut head_names);
             }
-        }
-        if head_names.is_empty() {
-            let mut walk = CaptureWalk::default();
-            walk.push_for_init(self.init.as_ref());
-            walk.push_opt_expr(self.test.as_ref());
-            walk.push_opt_expr(self.update.as_deref());
-            walk.push_stmt(&self.body);
-            return walk.run();
         }
         let nested = CaptureWalk::nested_mentions_of(|walk| {
             walk.push_for_init(self.init.as_ref());

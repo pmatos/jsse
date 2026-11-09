@@ -13,7 +13,8 @@ info: |
     ...
     e. Perform ? CreatePerIterationEnvironment(perIterationBindings).
 includes: [compareArray.js]
-features: [class-static-block]
+flags: [async]
+features: [class-static-block, generators, async-functions]
 ---*/
 
 function results(fs) {
@@ -82,3 +83,53 @@ for (let i = 0; i < 3; i++) {
 }
 assert.compareArray(results(fs), [0, 1, 2], "body binding fresh next to a closure that names the head binding");
 assert.sameValue(h(), "number", "a closure that names the head binding still resolves it");
+
+fs = [];
+for (let i = 0; i < 3; fs.push(() => i), i++) {}
+assert.compareArray(results(fs), [1, 2, 3], "head binding through a closure in the update clause");
+
+fs = [];
+for (let i = 0; (fs.push(() => i), i < 3); i++) {}
+assert.compareArray(results(fs), [0, 1, 2, 3], "head binding through a closure in the test clause");
+
+fs = [];
+for (let i = 0; i < 3; i++) {
+  fs.push(eval("() => i"));
+}
+assert.compareArray(results(fs), [0, 1, 2], "head binding through a direct eval outside any closure");
+
+fs = (0, eval)("var r = []; for (let i = 0; i < 3; i++) { with ({}) { r.push(() => i); } } r");
+assert.compareArray(results(fs), [0, 1, 2], "head binding through a closure inside with");
+
+function* generatorLoop() {
+  var captured = [];
+  for (let i = 0; i < 3; i++) {
+    const x = i * 10;
+    captured.push(() => x + 1);
+    captured.push(() => () => i);
+    yield i;
+  }
+  return captured;
+}
+var it = generatorLoop();
+var step;
+while (!(step = it.next()).done) {}
+assert.compareArray(
+  step.value.map(function (f, k) { return k % 2 ? f()() : f(); }),
+  [1, 0, 11, 1, 21, 2],
+  "generator loop: body binding and head binding both fresh per iteration"
+);
+
+async function asyncLoop() {
+  var captured = [];
+  for (let i = 0; i < 3; i++) {
+    const x = i * 10;
+    captured.push(() => x + 1);
+    captured.push(() => () => i);
+    await 0;
+  }
+  return captured.map(function (f, k) { return k % 2 ? f()() : f(); });
+}
+asyncLoop().then(function (values) {
+  assert.compareArray(values, [1, 0, 11, 1, 21, 2], "async loop: body binding and head binding both fresh per iteration");
+}).then($DONE, $DONE);

@@ -81,6 +81,9 @@ impl<'a> CaptureWalk<'a> {
         let mut names = Vec::new();
         let mut opaque = outer.opaque;
         for nested in std::mem::take(&mut outer.nested) {
+            if opaque {
+                break;
+            }
             let mut inside = CaptureWalk {
                 collect: true,
                 mode: WalkMode::Inside,
