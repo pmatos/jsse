@@ -150,6 +150,94 @@ fn parse_helper_size(
     Err(Completion::Throw(err))
 }
 
+fn require_object_receiver(
+    interp: &mut Interpreter,
+    this: &JsValue,
+    method: &str,
+) -> Result<(), Completion> {
+    if this.is_object() {
+        return Ok(());
+    }
+    let err =
+        interp.create_type_error(&format!("Iterator.prototype.{method} called on non-object"));
+    Err(Completion::Throw(err))
+}
+
+/// One `next()` call and its `value` read; `None` once the iterator is done.
+fn step_helper_value(
+    interp: &mut Interpreter,
+    iter: &JsValue,
+    next_method: &JsValue,
+) -> Result<Option<JsValue>, Completion> {
+    match interp.iterator_step_direct(iter, next_method) {
+        Ok(Some(result)) => interp
+            .iterator_value(&result)
+            .map(Some)
+            .map_err(Completion::Throw),
+        Ok(None) => Ok(None),
+        Err(e) => Err(Completion::Throw(e)),
+    }
+}
+
+/// Receiver check, limit parsing and GetIteratorDirect shared by `take` and `drop`.
+fn limited_helper_inputs(
+    interp: &mut Interpreter,
+    this: &JsValue,
+    args: &[JsValue],
+    method: &str,
+) -> Result<(f64, JsValue, JsValue), Completion> {
+    require_object_receiver(interp, this, method)?;
+    let limit = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+    let integer_limit = parse_helper_limit(interp, this, method, limit)?;
+    let (iter, next_method) =
+        get_iterator_direct_getter(interp, this).map_err(Completion::Throw)?;
+    Ok((integer_limit, iter, next_method))
+}
+
+/// Helper behind `chunks` and `windows`: `push` adds a value to the buffer and
+/// returns a full batch to yield; `emit_remainder` decides whether the values
+/// left at exhaustion form one last batch.
+fn create_buffered_helper(
+    interp: &mut Interpreter,
+    iter: JsValue,
+    next_method: JsValue,
+    push: impl Fn(&mut ElementVec, JsValue) -> Option<Vec<JsValue>> + 'static,
+    emit_remainder: impl Fn(&[JsValue]) -> bool + 'static,
+) -> JsValue {
+    let buffer = interp.create_array(vec![]);
+    let roots = vec![iter.clone(), next_method.clone(), buffer.clone()];
+    create_closing_helper(
+        interp,
+        (iter, next_method, buffer),
+        roots,
+        |s| s.0.clone(),
+        move |interp, state| {
+            let (iter, next_method, buffer) = {
+                let s = state.borrow();
+                (s.0.clone(), s.1.clone(), s.2.clone())
+            };
+            loop {
+                match interp.iterator_step_value_direct(&iter, &next_method) {
+                    Ok(Some(value)) => {
+                        let batch = interp.with_array_elements_mut(&buffer, |e| push(e, value));
+                        if let Some(values) = batch {
+                            return Ok(HelperStep::Yield(interp.create_array(values)));
+                        }
+                    }
+                    Ok(None) => {
+                        let values = interp.with_array_elements_mut(&buffer, |e| e.take());
+                        if emit_remainder(&values) {
+                            return Ok(HelperStep::FinalYield(interp.create_array(values)));
+                        }
+                        return Ok(HelperStep::Done);
+                    }
+                    Err(e) => return Err(Completion::Throw(e)),
+                }
+            }
+        },
+    )
+}
+
 /// The current iterator an iterator helper is drawing from, paired with that
 /// iterator's `next` method — a two-slot [`RootedSlots`] (see `CONTEXT.md`).
 /// Rooted once on the helper via `Interpreter::create_iterator_helper`, then
@@ -1039,9 +1127,8 @@ impl Interpreter {
         // map(mapper)
         self.define_method(iter_proto_id, "map", 1, |interp, this, args| {
             // Step 1-2: Require this to be an object
-            if !this.is_object() {
-                let err = interp.create_type_error("Iterator.prototype.map called on non-object");
-                return Completion::Throw(err);
+            if let Err(err) = require_object_receiver(interp, this, "map") {
+                return err;
             }
             let (mapper, iter, next_method) = propagate!(require_callable_arg(
                 interp,
@@ -1062,29 +1149,22 @@ impl Interpreter {
                         (s.0.clone(), s.1.clone(), s.2.clone(), s.3)
                     };
 
-                    match interp.iterator_step_direct(&iter, &next_method) {
-                        Ok(Some(result)) => {
-                            let value = match interp.iterator_value(&result) {
-                                Ok(v) => v,
-                                Err(e) => return Err(Completion::Throw(e)),
-                            };
-                            let mapped = interp.call_function(
-                                &mapper,
-                                &JsValue::UNDEFINED,
-                                &[value, JsValue::number(counter)],
-                            );
-                            state_next.borrow_mut().3 = counter + 1.0;
-                            match mapped {
-                                Completion::Normal(v) => Ok(HelperStep::Yield(v)),
-                                Completion::Throw(e) => {
-                                    let e = close_iterator_for_error(interp, &iter, e);
-                                    Err(Completion::Throw(e))
-                                }
-                                _ => Ok(HelperStep::Done),
-                            }
+                    let Some(value) = step_helper_value(interp, &iter, &next_method)? else {
+                        return Ok(HelperStep::Done);
+                    };
+                    let mapped = interp.call_function(
+                        &mapper,
+                        &JsValue::UNDEFINED,
+                        &[value, JsValue::number(counter)],
+                    );
+                    state_next.borrow_mut().3 = counter + 1.0;
+                    match mapped {
+                        Completion::Normal(v) => Ok(HelperStep::Yield(v)),
+                        Completion::Throw(e) => {
+                            let e = close_iterator_for_error(interp, &iter, e);
+                            Err(Completion::Throw(e))
                         }
-                        Ok(None) => Ok(HelperStep::Done),
-                        Err(e) => Err(Completion::Throw(e)),
+                        _ => Ok(HelperStep::Done),
                     }
                 },
             );
@@ -1093,10 +1173,8 @@ impl Interpreter {
 
         // filter(predicate)
         self.define_method(iter_proto_id, "filter", 1, |interp, this, args| {
-            if !this.is_object() {
-                let err =
-                    interp.create_type_error("Iterator.prototype.filter called on non-object");
-                return Completion::Throw(err);
+            if let Err(err) = require_object_receiver(interp, this, "filter") {
+                return err;
             }
             let (predicate, iter, next_method) = propagate!(require_callable_arg(
                 interp,
@@ -1117,39 +1195,26 @@ impl Interpreter {
                         (s.0.clone(), s.1.clone(), s.2.clone(), s.3)
                     };
 
-                    loop {
-                        match interp.iterator_step_direct(&iter, &next_method) {
-                            Ok(Some(result)) => {
-                                let value = match interp.iterator_value(&result) {
-                                    Ok(v) => v,
-                                    Err(e) => return Err(Completion::Throw(e)),
-                                };
-                                let test_result = interp.call_function(
-                                    &pred,
-                                    &JsValue::UNDEFINED,
-                                    &[value.clone(), JsValue::number(counter)],
-                                );
-                                counter += 1.0;
-                                state_next.borrow_mut().3 = counter;
-                                match test_result {
-                                    Completion::Normal(v) if interp.to_boolean_val(&v) => {
-                                        return Ok(HelperStep::Yield(value));
-                                    }
-                                    Completion::Throw(e) => {
-                                        let e = close_iterator_for_error(interp, &iter, e);
-                                        return Err(Completion::Throw(e));
-                                    }
-                                    _ => {}
-                                }
+                    while let Some(value) = step_helper_value(interp, &iter, &next_method)? {
+                        let test_result = interp.call_function(
+                            &pred,
+                            &JsValue::UNDEFINED,
+                            &[value.clone(), JsValue::number(counter)],
+                        );
+                        counter += 1.0;
+                        state_next.borrow_mut().3 = counter;
+                        match test_result {
+                            Completion::Normal(v) if interp.to_boolean_val(&v) => {
+                                return Ok(HelperStep::Yield(value));
                             }
-                            Ok(None) => {
-                                return Ok(HelperStep::Done);
-                            }
-                            Err(e) => {
+                            Completion::Throw(e) => {
+                                let e = close_iterator_for_error(interp, &iter, e);
                                 return Err(Completion::Throw(e));
                             }
+                            _ => {}
                         }
                     }
+                    Ok(HelperStep::Done)
                 },
             );
             Completion::Normal(helper)
@@ -1157,21 +1222,11 @@ impl Interpreter {
 
         // take(limit)
         self.define_method(iter_proto_id, "take", 1, |interp, this, args| {
-            // Step 2: If this is not an Object, throw TypeError
-            if !this.is_object() {
-                let err = interp.create_type_error("Iterator.prototype.take called on non-object");
-                return Completion::Throw(err);
-            }
-            let limit = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-            let integer_limit = match parse_helper_limit(interp, this, "take", limit) {
-                Ok(limit) => limit,
-                Err(err) => return err,
-            };
-            // Step 7: GetIteratorDirect
-            let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
-                Ok(v) => v,
-                Err(e) => return Completion::Throw(e),
-            };
+            let (integer_limit, iter, next_method) =
+                match limited_helper_inputs(interp, this, args, "take") {
+                    Ok(inputs) => inputs,
+                    Err(err) => return err,
+                };
 
             let roots = vec![iter.clone(), next_method.clone()];
             let helper = create_closing_helper(
@@ -1194,18 +1249,9 @@ impl Interpreter {
                     }
                     // Decrement remaining
                     state_next.borrow_mut().2 = remaining - 1.0;
-                    match interp.iterator_step_direct(&iter, &next_method) {
-                        Ok(Some(result)) => {
-                            let value = match interp.iterator_value(&result) {
-                                Ok(v) => v,
-                                Err(e) => return Err(Completion::Throw(e)),
-                            };
-                            // Don't close here — close on NEXT call when remaining hits 0
-                            Ok(HelperStep::Yield(value))
-                        }
-                        Ok(None) => Ok(HelperStep::Done),
-                        Err(e) => Err(Completion::Throw(e)),
-                    }
+                    // Don't close here — close on NEXT call when remaining hits 0
+                    Ok(step_helper_value(interp, &iter, &next_method)?
+                        .map_or(HelperStep::Done, HelperStep::Yield))
                 },
             );
             Completion::Normal(helper)
@@ -1213,21 +1259,11 @@ impl Interpreter {
 
         // drop(limit)
         self.define_method(iter_proto_id, "drop", 1, |interp, this, args| {
-            // Step 2: If this is not an Object, throw TypeError
-            if !this.is_object() {
-                let err = interp.create_type_error("Iterator.prototype.drop called on non-object");
-                return Completion::Throw(err);
-            }
-            let limit = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-            let integer_limit = match parse_helper_limit(interp, this, "drop", limit) {
-                Ok(limit) => limit,
-                Err(err) => return err,
-            };
-            // Step 7: GetIteratorDirect
-            let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
-                Ok(v) => v,
-                Err(e) => return Completion::Throw(e),
-            };
+            let (integer_limit, iter, next_method) =
+                match limited_helper_inputs(interp, this, args, "drop") {
+                    Ok(inputs) => inputs,
+                    Err(err) => return err,
+                };
 
             let roots = vec![iter.clone(), next_method.clone()];
             let helper = create_closing_helper(
@@ -1258,17 +1294,8 @@ impl Interpreter {
                         }
                         state_next.borrow_mut().3 = true;
                     }
-                    match interp.iterator_step_direct(&iter, &next_method) {
-                        Ok(Some(result)) => {
-                            let value = match interp.iterator_value(&result) {
-                                Ok(v) => v,
-                                Err(e) => return Err(Completion::Throw(e)),
-                            };
-                            Ok(HelperStep::Yield(value))
-                        }
-                        Ok(None) => Ok(HelperStep::Done),
-                        Err(e) => Err(Completion::Throw(e)),
-                    }
+                    Ok(step_helper_value(interp, &iter, &next_method)?
+                        .map_or(HelperStep::Done, HelperStep::Yield))
                 },
             );
             Completion::Normal(helper)
@@ -1276,73 +1303,34 @@ impl Interpreter {
 
         // chunks(chunkSize)
         self.define_method(iter_proto_id, "chunks", 1, |interp, this, args| {
-            if !this.is_object() {
-                return Completion::Throw(
-                    interp.create_type_error("Iterator.prototype.chunks called on non-object"),
-                );
+            if let Err(err) = require_object_receiver(interp, this, "chunks") {
+                return err;
             }
-
             let chunk_size = match parse_helper_size(interp, this, "chunkSize", args.first()) {
                 Ok(size) => size,
                 Err(err) => return err,
             };
-
             let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
                 Ok(v) => v,
                 Err(e) => return Completion::Throw(e),
             };
-
-            let buffer = interp.create_array(vec![]);
-
-            let roots = vec![iter.clone(), next_method.clone(), buffer.clone()];
-            let helper = create_closing_helper(
+            Completion::Normal(create_buffered_helper(
                 interp,
-                (iter, next_method, buffer),
-                roots,
-                |s| s.0.clone(),
-                move |interp, state_next| {
-                    let (iter, next_method, buffer) = {
-                        let s = state_next.borrow();
-                        (s.0.clone(), s.1.clone(), s.2.clone())
-                    };
-                    loop {
-                        match interp.iterator_step_value_direct(&iter, &next_method) {
-                            Ok(Some(value)) => {
-                                let values = interp.with_array_elements_mut(&buffer, |elements| {
-                                    elements.push(value);
-                                    (elements.len() == chunk_size).then(|| elements.take())
-                                });
-                                if let Some(values) = values {
-                                    let chunk = interp.create_array(values);
-                                    return Ok(HelperStep::Yield(chunk));
-                                }
-                            }
-                            Ok(None) => {
-                                let values = interp.with_array_elements_mut(&buffer, |e| e.take());
-                                if values.is_empty() {
-                                    return Ok(HelperStep::Done);
-                                }
-                                let chunk = interp.create_array(values);
-                                return Ok(HelperStep::FinalYield(chunk));
-                            }
-                            Err(e) => {
-                                return Err(Completion::Throw(e));
-                            }
-                        }
-                    }
+                iter,
+                next_method,
+                move |elements, value| {
+                    elements.push(value);
+                    (elements.len() == chunk_size).then(|| elements.take())
                 },
-            );
-            Completion::Normal(helper)
+                |remainder| !remainder.is_empty(),
+            ))
         });
 
         // windows(windowSize [, undersized])
         self.define_method(iter_proto_id, "windows", 1, |interp, this, args| {
-            if !this.is_object() {
-                return Completion::Throw(
-                    interp.create_type_error("Iterator.prototype.windows called on non-object"),
-                );
+            if let Err(err) = require_object_receiver(interp, this, "windows") {
+                return err;
             }
-
             let window_size = match parse_helper_size(interp, this, "windowSize", args.first()) {
                 Ok(size) => size,
                 Err(err) => return err,
@@ -1369,59 +1357,27 @@ impl Interpreter {
                 Err(e) => return Completion::Throw(e),
             };
 
-            let buffer = interp.create_array(vec![]);
-
-            let roots = vec![iter.clone(), next_method.clone(), buffer.clone()];
-            let helper = create_closing_helper(
+            Completion::Normal(create_buffered_helper(
                 interp,
-                (iter, next_method, buffer),
-                roots,
-                |s| s.0.clone(),
-                move |interp, state_next| {
-                    let (iter, next_method, buffer) = {
-                        let s = state_next.borrow();
-                        (s.0.clone(), s.1.clone(), s.2.clone())
-                    };
-                    loop {
-                        match interp.iterator_step_value_direct(&iter, &next_method) {
-                            Ok(Some(value)) => {
-                                let values = interp.with_array_elements_mut(&buffer, |elements| {
-                                    if elements.len() == window_size {
-                                        elements.shift();
-                                    }
-                                    elements.push(value);
-                                    (elements.len() == window_size).then(|| elements.to_vec())
-                                });
-                                if let Some(values) = values {
-                                    let window = interp.create_array(values);
-                                    return Ok(HelperStep::Yield(window));
-                                }
-                            }
-                            Ok(None) => {
-                                let values = interp.with_array_elements_mut(&buffer, |e| e.take());
-                                if allow_partial && !values.is_empty() && values.len() < window_size
-                                {
-                                    let window = interp.create_array(values);
-                                    return Ok(HelperStep::FinalYield(window));
-                                }
-                                return Ok(HelperStep::Done);
-                            }
-                            Err(e) => {
-                                return Err(Completion::Throw(e));
-                            }
-                        }
+                iter,
+                next_method,
+                move |elements, value| {
+                    if elements.len() == window_size {
+                        elements.shift();
                     }
+                    elements.push(value);
+                    (elements.len() == window_size).then(|| elements.to_vec())
                 },
-            );
-            Completion::Normal(helper)
+                move |remainder| {
+                    allow_partial && !remainder.is_empty() && remainder.len() < window_size
+                },
+            ))
         });
 
         // flatMap(mapper)
         self.define_method(iter_proto_id, "flatMap", 1, |interp, this, args| {
-            if !this.is_object() {
-                let err =
-                    interp.create_type_error("Iterator.prototype.flatMap called on non-object");
-                return Completion::Throw(err);
+            if let Err(err) = require_object_receiver(interp, this, "flatMap") {
+                return err;
             }
             let (mapper, iter, next_method) = propagate!(require_callable_arg(
                 interp,
