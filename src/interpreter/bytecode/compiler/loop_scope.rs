@@ -9,8 +9,10 @@
 //! That is unobservable only when:
 //!
 //! - nothing in the body can capture the environment: no function, arrow, class,
-//!   `with` or `eval` mention (the scan `for (let ...)` uses to skip
-//!   CreatePerIterationEnvironment);
+//!   `with` or `eval` mention, whatever names they use. This is a stricter scan
+//!   than the one `for (let ...)` uses to skip CreatePerIterationEnvironment,
+//!   which only asks whether a closure names a head binding, so it must not be
+//!   loosened to match it;
 //! - no name the head, test or update mentions is shadowed by the body's
 //!   bindings, since those parts now run inside the merged environment;
 //! - no read can see the previous iteration's value in place of the TDZ: every

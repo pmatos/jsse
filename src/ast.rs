@@ -10,6 +10,7 @@ mod boxed_variants;
 mod capture_walk;
 mod export_specifier;
 mod expr_box;
+mod for_capture;
 mod for_of;
 mod node_sites;
 mod pattern_elems;
@@ -644,14 +645,7 @@ impl ForStatement {
     /// the identity of a per-iteration lexical environment. `false` lets the
     /// loop reuse one environment in place.
     pub(crate) fn may_capture_iteration_scope(&self) -> bool {
-        self.scope_capture.get_or_compute(|| {
-            let mut walk = CaptureWalk::default();
-            walk.push_for_init(self.init.as_ref());
-            walk.push_opt_expr(self.test.as_ref());
-            walk.push_opt_expr(self.update.as_deref());
-            walk.push_stmt(&self.body);
-            walk.run()
-        })
+        self.scope_capture.get_or_compute(|| self.capture_verdict())
     }
 
     /// Whether the head is `for (await using ...;;)`, whose loop environment's

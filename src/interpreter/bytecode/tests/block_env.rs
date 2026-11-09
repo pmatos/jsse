@@ -125,3 +125,23 @@ fn break_out_of_nested_blocks_leaves_their_environments_first() {
         "the break leaves the two blocks it is nested in: {pops:?}"
     );
 }
+
+#[test]
+fn closure_ignoring_the_loop_head_binding_skips_the_per_iteration_copy() {
+    let chunk = compile_function_source(
+        "for (let i = 0; i < n; i++) { const x = i; fs.push(() => x); }",
+        &["n", "fs"],
+    );
+    assert_eq!(count_ops(&chunk, Op::CopyIterEnv), 0);
+    assert_eq!(count_ops(&chunk, Op::PushEnv), 2);
+}
+
+#[test]
+fn closure_ignoring_the_head_binding_still_gets_a_fresh_body_binding() {
+    let shown = assert_value_parity(
+        "var __r = (function(){ var fs = []; \
+         for (let i = 0; i < 3; i++) { const x = i * 10; fs.push(() => x + 1); } \
+         return fs.map(function (f) { return f(); }).join(); })();",
+    );
+    assert_eq!(shown, "1,11,21");
+}

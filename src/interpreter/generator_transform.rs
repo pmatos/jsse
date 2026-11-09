@@ -3551,8 +3551,8 @@ fn transform_for_statement(
     // this *one* frame at a constant depth — mirrors `exec_for`'s
     // `per_iteration_bindings` (`exec.rs`).
     //
-    // A loop whose head, test, update and body create no closure, class,
-    // `with` or direct `eval` cannot observe which frame it runs in, so it
+    // A loop with no `with` or direct `eval` whose closures and classes
+    // name no head binding cannot observe which frame it runs in, so it
     // keeps the single frame the head's `OpenBlock` pushed and skips the
     // `CopyForward` refreshes (`copy_per_iteration`).
     let per_iteration_bindings: Vec<(Atom, bool)> = if let Some(ForInit::Variable(decl)) =
