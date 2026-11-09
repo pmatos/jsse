@@ -2665,6 +2665,7 @@ impl Compiler {
             persistent_slots: self.max_persistent,
             fallback_reasons: self.fallback_reasons,
             trivial_private_getter: None,
+            trivial_accessor: None,
             member_pos: self.member_pos,
             binary_pos: self.binary_pos,
             pattern_src: self.pattern_src,
@@ -3299,11 +3300,11 @@ fn compile_function_body_as(
         }
     }
     if locals.is_empty() {
-        first.trivial_private_getter = first.detect_trivial_private_getter();
+        first.detect_trivial_shapes(shape);
         return Ok(first);
     }
     let mut chunk = compile_function_goal(body, locals, kind)?;
-    chunk.trivial_private_getter = chunk.detect_trivial_private_getter();
+    chunk.detect_trivial_shapes(shape);
     Ok(chunk)
 }
 

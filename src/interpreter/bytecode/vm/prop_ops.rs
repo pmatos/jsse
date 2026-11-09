@@ -85,8 +85,16 @@ pub(super) fn set_prop_op(
     let rhs = stack.pop().expect("stack underflow on SetProp rhs");
     let base = stack.pop().expect("stack underflow on SetProp base");
     let base_root = base.clone();
-    let strict = frame_env.borrow().strict;
-    let result = member_set(interp, base, name, rhs.clone(), strict);
+    let result = match interp.named_setter_fast(&base, name.property_key(), hint) {
+        Some(setter) => match interp.call_setter(&setter, &base, rhs.clone()) {
+            Completion::Throw(error) => Err(error),
+            _ => Ok(()),
+        },
+        None => {
+            let strict = frame_env.borrow().strict;
+            member_set(interp, base, name, rhs.clone(), strict)
+        }
+    };
     unroot_stack_value(interp, &rhs);
     unroot_stack_value(interp, &base_root);
     result?;

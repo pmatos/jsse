@@ -22,6 +22,8 @@ mod tests_stmt_pos;
 mod tests_store_pos;
 #[cfg(test)]
 mod tests_switch_table;
+#[cfg(test)]
+mod tests_trivial_accessor;
 
 use std::rc::Rc;
 
