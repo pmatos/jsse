@@ -245,29 +245,31 @@ statics and JS result construction remain with those algorithms.
 _Avoid_: byte captures, matcher view (for the caller-facing result).
 
 **Direct IteratorStepValue**:
-The synchronous iterator step through an explicitly captured `next` method,
-owned by `iterator_step_value_direct` in `builtins/iterators.rs`. It calls that
-method with the iterator as receiver, rejects a non-object result, and shares
-`iterator_result_value` with the generic step path to read `done` before `value`
-inside a GC Root Scope. Truthy `done` skips the value read; a step failure
-propagates without IteratorClose. Eager helpers and the existing zip, join,
-chunks, and windows consumers use this seam; each retains its own close policy,
-counters, and roots for values held across later user code. The method never
-looks up `next` again or uses the generic step's next-cache/intrinsic selection.
-Lazy helpers retain staged stepping where completion latching or value-skipping
-requires the result object.
+`iterator_step_value_direct` (`builtins/iterators.rs`) calls a captured `next`
+with the iterator receiver, rejects non-object results, then reads `done` before
+`value` in a GC Root Scope through `iterator_result_value`. Truthy `done` skips
+`value`; failures propagate without IteratorClose. Eager helpers, zip, join,
+chunks and windows retain close policy, counters and roots across later user
+code. No next lookup, cache or intrinsic selection occurs. Lazy helpers keep
+staged stepping when they must skip values.
 _Avoid_: eager loop kernel, next-method cache, iterator result protocol.
 
+**Iterator Helper Lifecycle**:
+`create_iterator_helper` (`builtins/iterators/lifecycle.rs`) owns states,
+reentry rejection, results, abrupt completion and close-once behavior.
+Step/close adapters supply capture roots and Yield/FinalYield/Done outcomes;
+FinalYield skips later close after source exhaustion. Return before start
+completes before close; suspended return stays executing through close.
+Adapters retain source-close order and Rooted Slot updates.
+_Avoid_: alive flag, running flag.
+
 **Promise Combinator Scope**:
-The synchronous setup and result convention shared by `all`, `allSettled`,
-`race`, `any`, `allKeyed`, and `allSettledKeyed` through `run_promise_combinator`.
-It creates a PromiseCapability before reading the constructor's `resolve`,
-roots the capability and retrieved callable for the operation's GC Root Scope,
-and returns the capability promise after success or rejection. A capability
-construction failure throws; later setup or operation errors reject. Each
-operation retains its own IteratorClose policy, enumeration, and element
-bookkeeping. Captures that survive the native call still use Pinned Native
-Roots and Rooted Slots.
+`run_promise_combinator` owns synchronous setup/results for all, allSettled,
+race, any, allKeyed and allSettledKeyed. It creates and roots a PromiseCapability
+before reading and rooting the constructor's resolve. Construction failure
+throws; subsequent errors reject; the capability promise is returned. Operations
+retain close policy, enumeration and element bookkeeping; persistent captures
+use Pinned Native Roots or Rooted Slots.
 _Avoid_: combinator setup record, resolver root frame.
 
 **Receiver Guard**:

@@ -4,33 +4,23 @@ use crate::interpreter::gc::RootedSlots;
 
 mod close;
 mod find;
+mod lifecycle;
 mod wrap_valid;
 use close::{
     close_iterator_for_error, iterator_close_all, iterator_close_getter,
     iterator_close_with_completion,
 };
+use lifecycle::HelperStep;
 
-type ZipState = Rc<
-    RefCell<(
-        Vec<(JsValue, JsValue)>,
-        Vec<bool>,
-        String,
-        Vec<JsValue>,
-        bool,
-    )>,
->;
+type ZipState = Rc<RefCell<(Vec<(JsValue, JsValue)>, Vec<bool>, String, Vec<JsValue>)>>;
 
-fn zip_next_inner(interp: &mut Interpreter, state: &ZipState) -> Completion {
-    let (ref iters, ref exhausted, ref mode, ref padding_values, alive) = {
+fn zip_next_inner(interp: &mut Interpreter, state: &ZipState) -> Result<HelperStep, Completion> {
+    let (ref iters, ref exhausted, ref mode, ref padding_values) = {
         let s = state.borrow();
-        (s.0.clone(), s.1.clone(), s.2.clone(), s.3.clone(), s.4)
+        (s.0.clone(), s.1.clone(), s.2.clone(), s.3.clone())
     };
-    if !alive {
-        return Completion::Normal(interp.create_iter_result_object(JsValue::UNDEFINED, true));
-    }
     if iters.is_empty() {
-        state.borrow_mut().4 = false;
-        return Completion::Normal(interp.create_iter_result_object(JsValue::UNDEFINED, true));
+        return Ok(HelperStep::Done);
     }
 
     let mut values = Vec::with_capacity(iters.len());
@@ -50,7 +40,6 @@ fn zip_next_inner(interp: &mut Interpreter, state: &ZipState) -> Completion {
                 new_exhausted[i] = true;
 
                 if mode == "shortest" {
-                    state.borrow_mut().4 = false;
                     let open: Vec<(JsValue, JsValue)> = iters
                         .iter()
                         .enumerate()
@@ -58,14 +47,11 @@ fn zip_next_inner(interp: &mut Interpreter, state: &ZipState) -> Completion {
                         .map(|(_, pair)| pair.clone())
                         .collect();
                     if let Err(e) = iterator_close_all(interp, &open, Ok(())) {
-                        return Completion::Throw(e);
+                        return Err(Completion::Throw(e));
                     }
-                    return Completion::Normal(
-                        interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                    );
+                    return Ok(HelperStep::Done);
                 } else if mode == "strict" {
                     if i != 0 {
-                        state.borrow_mut().4 = false;
                         let open: Vec<(JsValue, JsValue)> = iters
                             .iter()
                             .enumerate()
@@ -75,7 +61,7 @@ fn zip_next_inner(interp: &mut Interpreter, state: &ZipState) -> Completion {
                         let err = interp.create_type_error(
                             "Iterators passed to Iterator.zip with { mode: \"strict\" } have different lengths");
                         let _ = iterator_close_all(interp, &open, Err(err.clone()));
-                        return Completion::Throw(err);
+                        return Err(Completion::Throw(err));
                     }
                     for k in 1..iters.len() {
                         if new_exhausted[k] {
@@ -86,7 +72,6 @@ fn zip_next_inner(interp: &mut Interpreter, state: &ZipState) -> Completion {
                                 new_exhausted[k] = true;
                             }
                             Ok(Some(_)) => {
-                                state.borrow_mut().4 = false;
                                 let open: Vec<(JsValue, JsValue)> = iters
                                     .iter()
                                     .enumerate()
@@ -96,11 +81,10 @@ fn zip_next_inner(interp: &mut Interpreter, state: &ZipState) -> Completion {
                                 let err = interp.create_type_error(
                                     "Iterators passed to Iterator.zip with { mode: \"strict\" } have different lengths");
                                 let _ = iterator_close_all(interp, &open, Err(err.clone()));
-                                return Completion::Throw(err);
+                                return Err(Completion::Throw(err));
                             }
                             Err(e) => {
                                 new_exhausted[k] = true;
-                                state.borrow_mut().4 = false;
                                 let open: Vec<(JsValue, JsValue)> = iters
                                     .iter()
                                     .enumerate()
@@ -108,20 +92,16 @@ fn zip_next_inner(interp: &mut Interpreter, state: &ZipState) -> Completion {
                                     .map(|(_, pair)| pair.clone())
                                     .collect();
                                 let _ = iterator_close_all(interp, &open, Err(e.clone()));
-                                return Completion::Throw(e);
+                                return Err(Completion::Throw(e));
                             }
                         }
                     }
-                    state.borrow_mut().4 = false;
-                    return Completion::Normal(
-                        interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                    );
+                    return Ok(HelperStep::Done);
                 } else {
                     values.push(padding_values.get(i).cloned().unwrap_or(JsValue::UNDEFINED));
                 }
             }
             Err(e) => {
-                state.borrow_mut().4 = false;
                 state.borrow_mut().1 = new_exhausted.clone();
                 let open: Vec<(JsValue, JsValue)> = iters
                     .iter()
@@ -130,7 +110,7 @@ fn zip_next_inner(interp: &mut Interpreter, state: &ZipState) -> Completion {
                     .map(|(_, pair)| pair.clone())
                     .collect();
                 let _ = iterator_close_all(interp, &open, Err(e.clone()));
-                return Completion::Throw(e);
+                return Err(Completion::Throw(e));
             }
         }
     }
@@ -138,12 +118,11 @@ fn zip_next_inner(interp: &mut Interpreter, state: &ZipState) -> Completion {
     state.borrow_mut().1 = new_exhausted.clone();
 
     if mode == "longest" && new_exhausted.iter().all(|e| *e) {
-        state.borrow_mut().4 = false;
-        return Completion::Normal(interp.create_iter_result_object(JsValue::UNDEFINED, true));
+        return Ok(HelperStep::Done);
     }
 
     let arr = interp.create_array(values);
-    Completion::Normal(interp.create_iter_result_object(arr, false))
+    Ok(HelperStep::Yield(arr))
 }
 
 type ZipKeyedState = Rc<
@@ -153,12 +132,14 @@ type ZipKeyedState = Rc<
         Vec<bool>,
         String,
         Vec<JsValue>,
-        bool,
     )>,
 >;
 
-fn zip_keyed_next_inner(interp: &mut Interpreter, state: &ZipKeyedState) -> Completion {
-    let (ref keys, ref iters, ref exhausted, ref mode, ref padding_values, alive) = {
+fn zip_keyed_next_inner(
+    interp: &mut Interpreter,
+    state: &ZipKeyedState,
+) -> Result<HelperStep, Completion> {
+    let (ref keys, ref iters, ref exhausted, ref mode, ref padding_values) = {
         let s = state.borrow();
         (
             s.0.clone(),
@@ -166,15 +147,10 @@ fn zip_keyed_next_inner(interp: &mut Interpreter, state: &ZipKeyedState) -> Comp
             s.2.clone(),
             s.3.clone(),
             s.4.clone(),
-            s.5,
         )
     };
-    if !alive {
-        return Completion::Normal(interp.create_iter_result_object(JsValue::UNDEFINED, true));
-    }
     if iters.is_empty() {
-        state.borrow_mut().5 = false;
-        return Completion::Normal(interp.create_iter_result_object(JsValue::UNDEFINED, true));
+        return Ok(HelperStep::Done);
     }
 
     let mut values: Vec<(JsPropertyKey, JsValue)> = Vec::with_capacity(iters.len());
@@ -197,7 +173,6 @@ fn zip_keyed_next_inner(interp: &mut Interpreter, state: &ZipKeyedState) -> Comp
                 new_exhausted[i] = true;
 
                 if mode == "shortest" {
-                    state.borrow_mut().5 = false;
                     let open: Vec<(JsValue, JsValue)> = iters
                         .iter()
                         .enumerate()
@@ -205,14 +180,11 @@ fn zip_keyed_next_inner(interp: &mut Interpreter, state: &ZipKeyedState) -> Comp
                         .map(|(_, pair)| pair.clone())
                         .collect();
                     if let Err(e) = iterator_close_all(interp, &open, Ok(())) {
-                        return Completion::Throw(e);
+                        return Err(Completion::Throw(e));
                     }
-                    return Completion::Normal(
-                        interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                    );
+                    return Ok(HelperStep::Done);
                 } else if mode == "strict" {
                     if i != 0 {
-                        state.borrow_mut().5 = false;
                         let open: Vec<(JsValue, JsValue)> = iters
                             .iter()
                             .enumerate()
@@ -222,7 +194,7 @@ fn zip_keyed_next_inner(interp: &mut Interpreter, state: &ZipKeyedState) -> Comp
                         let err = interp.create_type_error(
                             "Iterators passed to Iterator.zipKeyed with { mode: \"strict\" } have different lengths");
                         let _ = iterator_close_all(interp, &open, Err(err.clone()));
-                        return Completion::Throw(err);
+                        return Err(Completion::Throw(err));
                     }
                     for k in 1..iters.len() {
                         if new_exhausted[k] {
@@ -233,7 +205,6 @@ fn zip_keyed_next_inner(interp: &mut Interpreter, state: &ZipKeyedState) -> Comp
                                 new_exhausted[k] = true;
                             }
                             Ok(Some(_)) => {
-                                state.borrow_mut().5 = false;
                                 let open: Vec<(JsValue, JsValue)> = iters
                                     .iter()
                                     .enumerate()
@@ -243,11 +214,10 @@ fn zip_keyed_next_inner(interp: &mut Interpreter, state: &ZipKeyedState) -> Comp
                                 let err = interp.create_type_error(
                                     "Iterators passed to Iterator.zipKeyed with { mode: \"strict\" } have different lengths");
                                 let _ = iterator_close_all(interp, &open, Err(err.clone()));
-                                return Completion::Throw(err);
+                                return Err(Completion::Throw(err));
                             }
                             Err(e) => {
                                 new_exhausted[k] = true;
-                                state.borrow_mut().5 = false;
                                 let open: Vec<(JsValue, JsValue)> = iters
                                     .iter()
                                     .enumerate()
@@ -255,14 +225,11 @@ fn zip_keyed_next_inner(interp: &mut Interpreter, state: &ZipKeyedState) -> Comp
                                     .map(|(_, pair)| pair.clone())
                                     .collect();
                                 let _ = iterator_close_all(interp, &open, Err(e.clone()));
-                                return Completion::Throw(e);
+                                return Err(Completion::Throw(e));
                             }
                         }
                     }
-                    state.borrow_mut().5 = false;
-                    return Completion::Normal(
-                        interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                    );
+                    return Ok(HelperStep::Done);
                 } else {
                     // longest mode: append padding value
                     values.push((
@@ -272,7 +239,6 @@ fn zip_keyed_next_inner(interp: &mut Interpreter, state: &ZipKeyedState) -> Comp
                 }
             }
             Err(e) => {
-                state.borrow_mut().5 = false;
                 state.borrow_mut().2 = new_exhausted.clone();
                 let open: Vec<(JsValue, JsValue)> = iters
                     .iter()
@@ -281,7 +247,7 @@ fn zip_keyed_next_inner(interp: &mut Interpreter, state: &ZipKeyedState) -> Comp
                     .map(|(_, pair)| pair.clone())
                     .collect();
                 let _ = iterator_close_all(interp, &open, Err(e.clone()));
-                return Completion::Throw(e);
+                return Err(Completion::Throw(e));
             }
         }
     }
@@ -290,8 +256,7 @@ fn zip_keyed_next_inner(interp: &mut Interpreter, state: &ZipKeyedState) -> Comp
 
     // For longest mode: check if ALL are now exhausted
     if mode == "longest" && new_exhausted.iter().all(|e| *e) {
-        state.borrow_mut().5 = false;
-        return Completion::Normal(interp.create_iter_result_object(JsValue::UNDEFINED, true));
+        return Ok(HelperStep::Done);
     }
 
     // Create null-prototype result object with key-value pairs
@@ -311,7 +276,7 @@ fn zip_keyed_next_inner(interp: &mut Interpreter, state: &ZipKeyedState) -> Comp
     }
     let result_id = result_obj_id;
     let result_val = JsValue::object(result_id);
-    Completion::Normal(interp.create_iter_result_object(result_val, false))
+    Ok(HelperStep::Yield(result_val))
 }
 
 // GetIteratorDirect that uses get_object_property (invokes getters/Proxy traps)
@@ -333,7 +298,7 @@ fn get_iterator_direct_getter(
 
 /// The current iterator an iterator helper is drawing from, paired with that
 /// iterator's `next` method — a two-slot [`RootedSlots`] (see `CONTEXT.md`).
-/// Rooted once on the helper via `Interpreter::set_helper_gc_roots`, then
+/// Rooted once on the helper via `Interpreter::create_iterator_helper`, then
 /// replaced in place.
 ///
 /// Slot 0 alone decides occupancy: the spec opens an iterator before reading
@@ -348,7 +313,7 @@ impl RootedPair {
         Self(RootedSlots::new(interp, 2))
     }
 
-    /// The value to hand to `set_helper_gc_roots`; rooting it roots both slots.
+    /// The constructor capture root; rooting it roots both slots.
     fn root(&self) -> JsValue {
         self.0.root()
     }
@@ -898,112 +863,11 @@ impl Interpreter {
             .borrow_mut()
             .set_class("Iterator Helper");
 
-        // next() — reads next + gen_state from this object's IterHelperData::Helper
         self.define_method(proto_id, "next", 0, |interp, this, args| {
-            let Some(this_id) = this.as_object_id() else {
-                return Completion::Throw(
-                    interp.create_type_error("Iterator Helper next called on non-object"),
-                );
-            };
-            let (next_closure, gen_state) = {
-                let obj = match interp.get_object(this_id) {
-                    Some(o) => o,
-                    None => {
-                        return Completion::Throw(
-                            interp
-                                .create_type_error("Iterator Helper next called on invalid object"),
-                        );
-                    }
-                };
-                let b = obj.borrow();
-                match b.iter_helper() {
-                    Some(crate::interpreter::types::IterHelperData::Helper {
-                        next,
-                        gen_state,
-                        ..
-                    }) => (next.clone(), gen_state.clone()),
-                    _ => {
-                        return Completion::Throw(
-                            interp.create_type_error("next method called on incompatible object"),
-                        );
-                    }
-                }
-            };
-            let s = gen_state.get();
-            if s == 2 {
-                return Completion::Throw(interp.create_type_error("Generator is already running"));
-            }
-            if s == 3 {
-                return Completion::Normal(
-                    interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                );
-            }
-            gen_state.set(2);
-            let result = interp.call_function(&next_closure, this, args);
-            let is_done = if let Completion::Normal(ref v) = result {
-                if let Some(v_id) = v.as_object_id() {
-                    match interp.get_object_property(v_id, "done", v) {
-                        Completion::Normal(d) => d.as_boolean() == Some(true),
-                        _ => false,
-                    }
-                } else {
-                    false
-                }
-            } else {
-                false
-            };
-            gen_state.set(if is_done { 3 } else { 1 });
-            result
+            interp.resume_iterator_helper(this, args, false)
         });
-
-        // return() — reads return_closure + gen_state from this object's IterHelperData::Helper
         self.define_method(proto_id, "return", 0, |interp, this, args| {
-            let Some(this_id) = this.as_object_id() else {
-                return Completion::Throw(
-                    interp.create_type_error("Iterator Helper return called on non-object"),
-                );
-            };
-            let (return_closure, gen_state) = {
-                let obj =
-                    match interp.get_object(this_id) {
-                        Some(o) => o,
-                        None => {
-                            return Completion::Throw(interp.create_type_error(
-                                "Iterator Helper return called on invalid object",
-                            ));
-                        }
-                    };
-                let b = obj.borrow();
-                match b.iter_helper() {
-                    Some(crate::interpreter::types::IterHelperData::Helper {
-                        return_closure,
-                        gen_state,
-                        ..
-                    }) => (return_closure.clone(), gen_state.clone()),
-                    _ => {
-                        return Completion::Throw(
-                            interp.create_type_error("return method called on incompatible object"),
-                        );
-                    }
-                }
-            };
-            let s = gen_state.get();
-            if s == 2 {
-                return Completion::Throw(interp.create_type_error("Generator is already running"));
-            }
-            if s == 3 {
-                return Completion::Normal(
-                    interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                );
-            }
-            if s == 0 {
-                gen_state.set(3);
-                return interp.call_function(&return_closure, this, args);
-            }
-            gen_state.set(2);
-            let result = interp.call_function(&return_closure, this, args);
-            gen_state.set(3);
-            result
+            interp.resume_iterator_helper(this, args, true)
         });
 
         // @@iterator returning this
@@ -1024,45 +888,6 @@ impl Interpreter {
         self.define_to_string_tag(proto_id, "Iterator Helper");
 
         self.realm_mut().iterator_helper_prototype = Some(proto_id);
-    }
-
-    fn create_iterator_helper_object(&mut self, next_fn: JsValue, return_fn: JsValue) -> JsValue {
-        self.ensure_iterator_helper_prototype();
-        let state = Rc::new(std::cell::Cell::new(0u8));
-
-        let obj_id = self.create_object_id();
-        self.get_object_cell_expect(obj_id)
-            .borrow_mut()
-            .set_proto(self.realm().iterator_helper_prototype);
-        self.get_object_cell_expect(obj_id)
-            .borrow_mut()
-            .set_class("Iterator Helper");
-        {
-            let mut obj = self.get_object_cell_expect(obj_id).borrow_mut();
-            obj.kind = crate::interpreter::types::ObjectKind::IterHelper(Box::new(
-                crate::interpreter::types::IterHelperData::Helper {
-                    next: next_fn.clone(),
-                    return_closure: return_fn.clone(),
-                    gen_state: state,
-                },
-            ));
-            obj.gc_native_roots_mut().extend([next_fn, return_fn]);
-        }
-
-        let id = obj_id;
-        JsValue::object(id)
-    }
-
-    /// Pin every value an iterator-helper closure captured. A thin adapter over
-    /// `pin_native_root` so `gc_native_roots` has a single mutator; each helper
-    /// object is fresh here, so appending matches the previous assignment.
-    /// Captures that are reassigned after construction must instead live in a
-    /// [`RootedSlots`] rooted here and be mutated in place. Repeatedly pinning
-    /// replacements would retain every superseded value until the helper dies.
-    fn set_helper_gc_roots(&mut self, helper: &JsValue, roots: Vec<JsValue>) {
-        for root in &roots {
-            self.pin_native_root(helper, root);
-        }
     }
 
     fn setup_iterator_helper_methods(&mut self, iter_proto_id: u64) {
@@ -1437,583 +1262,333 @@ impl Interpreter {
 
     fn setup_iterator_lazy_helpers(&mut self, iter_proto_id: u64) {
         // map(mapper)
-        self.define_method(
-            iter_proto_id,
-            "map",
-            1,
-            |interp, this, args| {
-                // Step 1-2: Require this to be an object
-                if !this.is_object() {
-                    let err = interp.create_type_error("Iterator.prototype.map called on non-object");
-                    return Completion::Throw(err);
-                }
-                let (mapper, iter, next_method) =
-                    propagate!(require_callable_arg(interp, this, args, "mapper is not a function"));
+        self.define_method(iter_proto_id, "map", 1, |interp, this, args| {
+            // Step 1-2: Require this to be an object
+            if !this.is_object() {
+                let err = interp.create_type_error("Iterator.prototype.map called on non-object");
+                return Completion::Throw(err);
+            }
+            let (mapper, iter, next_method) = propagate!(require_callable_arg(
+                interp,
+                this,
+                args,
+                "mapper is not a function"
+            ));
 
-                // state: (iter, next_method, mapper, counter, alive, running)
-                #[allow(clippy::type_complexity)]
-                let state: Rc<RefCell<(JsValue, JsValue, JsValue, f64, bool, bool)>> =
-                    Rc::new(RefCell::new((iter, next_method, mapper, 0.0, true, false)));
+            // Captured iterator record, callback and next callback index.
+            let state = Rc::new(RefCell::new((iter, next_method, mapper, 0.0)));
+            let roots = {
+                let s = state.borrow();
+                vec![s.0.clone(), s.1.clone(), s.2.clone()]
+            };
+            let state_next = state.clone();
+            let state_ret = state;
+            let helper = interp.create_iterator_helper(
+                roots,
+                move |interp| {
+                    let (iter, next_method, mapper, counter) = {
+                        let s = state_next.borrow();
+                        (s.0.clone(), s.1.clone(), s.2.clone(), s.3)
+                    };
 
-                let state_next = state.clone();
-                let next_fn = interp.create_function(JsFunction::native(
-                    "next".to_string(),
-                    0,
-                    move |interp, _this, _args| {
-                        let (iter, next_method, mapper, counter, alive, running) = {
-                            let s = state_next.borrow();
-                            (s.0.clone(), s.1.clone(), s.2.clone(), s.3, s.4, s.5)
-                        };
-                        if !alive {
-                            return Completion::Normal(
-                                interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                            );
-                        }
-                        if running {
-                            let err = interp.create_type_error("Iterator helper method called while iterator is already being iterated");
-                            return Completion::Throw(err);
-                        }
-                        state_next.borrow_mut().5 = true;
-                        let result = (|| {
-                            match interp.iterator_step_direct(&iter, &next_method) {
-                                Ok(Some(result)) => {
-                                    let value = match interp.iterator_value(&result) {
-                                        Ok(v) => v,
-                                        Err(e) => return Completion::Throw(e),
-                                    };
-                                    let mapped = interp.call_function(
-                                        &mapper,
-                                        &JsValue::UNDEFINED,
-                                        &[value, JsValue::number(counter)],
-                                    );
-                                    state_next.borrow_mut().3 = counter + 1.0;
-                                    match mapped {
-                                        Completion::Normal(v) => Completion::Normal(
-                                            interp.create_iter_result_object(v, false),
-                                        ),
-                                        Completion::Throw(e) => {
-                                            state_next.borrow_mut().4 = false;
-                                            let e = close_iterator_for_error(interp, &iter, e);
-                                            Completion::Throw(e)
-                                        }
-                                        _ => Completion::Normal(
-                                            interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                                        ),
-                                    }
-                                }
-                                Ok(None) => {
-                                    state_next.borrow_mut().4 = false;
-                                    Completion::Normal(
-                                        interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                                    )
-                                }
-                                Err(e) => {
-                                    state_next.borrow_mut().4 = false;
-                                    Completion::Throw(e)
-                                }
-                            }
-                        })();
-                        state_next.borrow_mut().5 = false;
-                        result
-                    },
-                ));
-
-                let state_ret = state.clone();
-                let return_fn = interp.create_function(JsFunction::native(
-                    "return".to_string(),
-                    0,
-                    move |interp, _this, _args| {
-                        let (iter, alive, running) = {
-                            let s = state_ret.borrow();
-                            (s.0.clone(), s.4, s.5)
-                        };
-                        if running {
-                            let err = interp.create_type_error("Iterator helper method called while iterator is already being iterated");
-                            return Completion::Throw(err);
-                        }
-                        state_ret.borrow_mut().5 = true;
-                        state_ret.borrow_mut().4 = false;
-                        let result = if alive
-                            && let Err(e) = iterator_close_getter(interp, &iter) {
-                                Completion::Throw(e)
-                            } else {
-                                Completion::Normal(
-                                    interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                                )
+                    match interp.iterator_step_direct(&iter, &next_method) {
+                        Ok(Some(result)) => {
+                            let value = match interp.iterator_value(&result) {
+                                Ok(v) => v,
+                                Err(e) => return Err(Completion::Throw(e)),
                             };
-                        state_ret.borrow_mut().5 = false;
-                        result
-                    },
-                ));
-
-                let helper = interp.create_iterator_helper_object(next_fn, return_fn);
-                {
-                    let b = state.borrow();
-                    interp.set_helper_gc_roots(&helper, vec![b.0.clone(), b.1.clone(), b.2.clone()]);
-                }
-                Completion::Normal(helper)
-            },
-        );
+                            let mapped = interp.call_function(
+                                &mapper,
+                                &JsValue::UNDEFINED,
+                                &[value, JsValue::number(counter)],
+                            );
+                            state_next.borrow_mut().3 = counter + 1.0;
+                            match mapped {
+                                Completion::Normal(v) => Ok(HelperStep::Yield(v)),
+                                Completion::Throw(e) => {
+                                    let e = close_iterator_for_error(interp, &iter, e);
+                                    Err(Completion::Throw(e))
+                                }
+                                _ => Ok(HelperStep::Done),
+                            }
+                        }
+                        Ok(None) => Ok(HelperStep::Done),
+                        Err(e) => Err(Completion::Throw(e)),
+                    }
+                },
+                move |interp| {
+                    let iter = state_ret.borrow().0.clone();
+                    iterator_close_getter(interp, &iter)
+                },
+            );
+            Completion::Normal(helper)
+        });
 
         // filter(predicate)
-        self.define_method(
-            iter_proto_id,
-            "filter",
-            1,
-            |interp, this, args| {
-                if !this.is_object() {
-                    let err = interp.create_type_error("Iterator.prototype.filter called on non-object");
-                    return Completion::Throw(err);
-                }
-                let (predicate, iter, next_method) =
-                    propagate!(require_callable_arg(interp, this, args, "predicate is not a function"));
+        self.define_method(iter_proto_id, "filter", 1, |interp, this, args| {
+            if !this.is_object() {
+                let err =
+                    interp.create_type_error("Iterator.prototype.filter called on non-object");
+                return Completion::Throw(err);
+            }
+            let (predicate, iter, next_method) = propagate!(require_callable_arg(
+                interp,
+                this,
+                args,
+                "predicate is not a function"
+            ));
 
-                // state: (iter, next_method, predicate, counter, alive, running)
-                #[allow(clippy::type_complexity)]
-                let state: Rc<RefCell<(JsValue, JsValue, JsValue, f64, bool, bool)>> =
-                    Rc::new(RefCell::new((iter, next_method, predicate, 0.0, true, false)));
+            // Captured iterator record, callback and next callback index.
+            let state = Rc::new(RefCell::new((iter, next_method, predicate, 0.0)));
+            let roots = {
+                let s = state.borrow();
+                vec![s.0.clone(), s.1.clone(), s.2.clone()]
+            };
+            let state_next = state.clone();
+            let state_ret = state;
+            let helper = interp.create_iterator_helper(
+                roots,
+                move |interp| {
+                    let (iter, next_method, pred, mut counter) = {
+                        let s = state_next.borrow();
+                        (s.0.clone(), s.1.clone(), s.2.clone(), s.3)
+                    };
 
-                let state_next = state.clone();
-                let next_fn = interp.create_function(JsFunction::native(
-                    "next".to_string(),
-                    0,
-                    move |interp, _this, _args| {
-                        let (iter, next_method, pred, mut counter, alive, running) = {
-                            let s = state_next.borrow();
-                            (s.0.clone(), s.1.clone(), s.2.clone(), s.3, s.4, s.5)
-                        };
-                        if !alive {
-                            return Completion::Normal(
-                                interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                            );
-                        }
-                        if running {
-                            let err = interp.create_type_error("Iterator helper method called while iterator is already being iterated");
-                            return Completion::Throw(err);
-                        }
-                        state_next.borrow_mut().5 = true;
-                        let result = (|| {
-                            loop {
-                                match interp.iterator_step_direct(&iter, &next_method) {
-                                    Ok(Some(result)) => {
-                                        let value = match interp.iterator_value(&result) {
-                                        Ok(v) => v,
-                                        Err(e) => return Completion::Throw(e),
-                                    };
-                                        let test_result = interp.call_function(
-                                            &pred,
-                                            &JsValue::UNDEFINED,
-                                            &[value.clone(), JsValue::number(counter)],
-                                        );
-                                        counter += 1.0;
-                                        state_next.borrow_mut().3 = counter;
-                                        match test_result {
-                                            Completion::Normal(v)
-                                                if interp.to_boolean_val(&v) => {
-                                                    return Completion::Normal(
-                                                        interp.create_iter_result_object(value, false),
-                                                    );
-                                                }
-                                            Completion::Throw(e) => {
-                                                state_next.borrow_mut().4 = false;
-                                                let e = close_iterator_for_error(interp, &iter, e);
-                                                return Completion::Throw(e);
-                                            }
-                                            _ => {}
-                                        }
+                    loop {
+                        match interp.iterator_step_direct(&iter, &next_method) {
+                            Ok(Some(result)) => {
+                                let value = match interp.iterator_value(&result) {
+                                    Ok(v) => v,
+                                    Err(e) => return Err(Completion::Throw(e)),
+                                };
+                                let test_result = interp.call_function(
+                                    &pred,
+                                    &JsValue::UNDEFINED,
+                                    &[value.clone(), JsValue::number(counter)],
+                                );
+                                counter += 1.0;
+                                state_next.borrow_mut().3 = counter;
+                                match test_result {
+                                    Completion::Normal(v) if interp.to_boolean_val(&v) => {
+                                        return Ok(HelperStep::Yield(value));
                                     }
-                                    Ok(None) => {
-                                        state_next.borrow_mut().4 = false;
-                                        return Completion::Normal(
-                                            interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                                        );
+                                    Completion::Throw(e) => {
+                                        let e = close_iterator_for_error(interp, &iter, e);
+                                        return Err(Completion::Throw(e));
                                     }
-                                    Err(e) => {
-                                        state_next.borrow_mut().4 = false;
-                                        return Completion::Throw(e);
-                                    }
+                                    _ => {}
                                 }
                             }
-                        })();
-                        state_next.borrow_mut().5 = false;
-                        result
-                    },
-                ));
-
-                let state_ret = state.clone();
-                let return_fn = interp.create_function(JsFunction::native(
-                    "return".to_string(),
-                    0,
-                    move |interp, _this, _args| {
-                        let (iter, alive, running) = {
-                            let s = state_ret.borrow();
-                            (s.0.clone(), s.4, s.5)
-                        };
-                        if running {
-                            let err = interp.create_type_error("Iterator helper method called while iterator is already being iterated");
-                            return Completion::Throw(err);
-                        }
-                        state_ret.borrow_mut().5 = true;
-                        state_ret.borrow_mut().4 = false;
-                        let result = if alive {
-                            if let Err(e) = iterator_close_getter(interp, &iter) {
-                                Completion::Throw(e)
-                            } else {
-                                Completion::Normal(
-                                    interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                                )
+                            Ok(None) => {
+                                return Ok(HelperStep::Done);
                             }
-                        } else {
-                            Completion::Normal(
-                                interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                            )
-                        };
-                        state_ret.borrow_mut().5 = false;
-                        result
-                    },
-                ));
-
-                let helper = interp.create_iterator_helper_object(next_fn, return_fn);
-                {
-                    let b = state.borrow();
-                    interp.set_helper_gc_roots(&helper, vec![b.0.clone(), b.1.clone(), b.2.clone()]);
-                }
-                Completion::Normal(helper)
-            },
-        );
+                            Err(e) => {
+                                return Err(Completion::Throw(e));
+                            }
+                        }
+                    }
+                },
+                move |interp| {
+                    let iter = state_ret.borrow().0.clone();
+                    iterator_close_getter(interp, &iter)
+                },
+            );
+            Completion::Normal(helper)
+        });
 
         // take(limit)
-        self.define_method(
-            iter_proto_id,
-            "take",
-            1,
-            |interp, this, args| {
-                // Step 2: If this is not an Object, throw TypeError
-                if !this.is_object() {
-                    let err =
-                        interp.create_type_error("Iterator.prototype.take called on non-object");
-                    return Completion::Throw(err);
+        self.define_method(iter_proto_id, "take", 1, |interp, this, args| {
+            // Step 2: If this is not an Object, throw TypeError
+            if !this.is_object() {
+                let err = interp.create_type_error("Iterator.prototype.take called on non-object");
+                return Completion::Throw(err);
+            }
+            // Step 3: numLimit = ToNumber(limit) — can throw via valueOf
+            let limit_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+            let num_limit = match interp.to_number_value(&limit_val) {
+                Ok(n) => n,
+                Err(e) => {
+                    // Close underlying iterator before propagating error
+                    let e = close_iterator_for_error(interp, this, e);
+                    return Completion::Throw(e);
                 }
-                // Step 3: numLimit = ToNumber(limit) — can throw via valueOf
-                let limit_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                let num_limit = match interp.to_number_value(&limit_val) {
-                    Ok(n) => n,
-                    Err(e) => {
-                        // Close underlying iterator before propagating error
-                        let e = close_iterator_for_error(interp, this, e);
-                        return Completion::Throw(e);
+            };
+            // Step 4: If numLimit is NaN, throw RangeError
+            if num_limit.is_nan() {
+                let err =
+                    interp.create_error("RangeError", "take limit must be a non-negative number");
+                let err = close_iterator_for_error(interp, this, err);
+                return Completion::Throw(err);
+            }
+            // Step 5: If numLimit is finite and numLimit > 2**53 - 1, throw RangeError
+            if num_limit.is_finite() && num_limit > 9007199254740991.0 {
+                let err = interp.create_error("RangeError", "take limit must not exceed 2**53 - 1");
+                let err = close_iterator_for_error(interp, this, err);
+                return Completion::Throw(err);
+            }
+            // Step 6-7: integerLimit = ToIntegerOrInfinity, check < 0
+            let integer_limit = if num_limit.is_infinite() {
+                num_limit
+            } else {
+                num_limit.trunc()
+            };
+            if integer_limit < 0.0 {
+                let err =
+                    interp.create_error("RangeError", "take limit must be a non-negative number");
+                let err = close_iterator_for_error(interp, this, err);
+                return Completion::Throw(err);
+            }
+            // Step 7: GetIteratorDirect
+            let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
+                Ok(v) => v,
+                Err(e) => return Completion::Throw(e),
+            };
+
+            // Captured iterator record and remaining limit.
+            let state = Rc::new(RefCell::new((iter, next_method, integer_limit)));
+            let roots = {
+                let s = state.borrow();
+                vec![s.0.clone(), s.1.clone()]
+            };
+            let state_next = state.clone();
+            let state_ret = state;
+            let helper = interp.create_iterator_helper(
+                roots,
+                move |interp| {
+                    let (iter, next_method, remaining) = {
+                        let s = state_next.borrow();
+                        (s.0.clone(), s.1.clone(), s.2)
+                    };
+
+                    // Per spec: check remaining FIRST, close on the call AFTER exhaustion
+                    if remaining <= 0.0 {
+                        if let Err(e) = iterator_close_getter(interp, &iter) {
+                            return Err(Completion::Throw(e));
+                        }
+                        return Ok(HelperStep::Done);
                     }
-                };
-                // Step 4: If numLimit is NaN, throw RangeError
-                if num_limit.is_nan() {
-                    let err = interp
-                        .create_error("RangeError", "take limit must be a non-negative number");
-                    let err = close_iterator_for_error(interp, this, err);
-                    return Completion::Throw(err);
-                }
-                // Step 5: If numLimit is finite and numLimit > 2**53 - 1, throw RangeError
-                if num_limit.is_finite() && num_limit > 9007199254740991.0 {
-                    let err = interp.create_error(
-                        "RangeError",
-                        "take limit must not exceed 2**53 - 1",
-                    );
-                    let err = close_iterator_for_error(interp, this, err);
-                    return Completion::Throw(err);
-                }
-                // Step 6-7: integerLimit = ToIntegerOrInfinity, check < 0
-                let integer_limit = if num_limit.is_infinite() {
-                    num_limit
-                } else {
-                    num_limit.trunc()
-                };
-                if integer_limit < 0.0 {
-                    let err = interp
-                        .create_error("RangeError", "take limit must be a non-negative number");
-                    let err = close_iterator_for_error(interp, this, err);
-                    return Completion::Throw(err);
-                }
-                // Step 7: GetIteratorDirect
-                let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
-                    Ok(v) => v,
-                    Err(e) => return Completion::Throw(e),
-                };
-
-                // state: (iter, next_method, remaining, alive, running)
-                #[allow(clippy::type_complexity)]
-                let state: Rc<RefCell<(JsValue, JsValue, f64, bool, bool)>> =
-                    Rc::new(RefCell::new((iter, next_method, integer_limit, true, false)));
-
-                let state_next = state.clone();
-                let next_fn = interp.create_function(JsFunction::native(
-                    "next".to_string(),
-                    0,
-                    move |interp, _this, _args| {
-                        let (iter, next_method, remaining, alive, running) = {
-                            let s = state_next.borrow();
-                            (s.0.clone(), s.1.clone(), s.2, s.3, s.4)
-                        };
-                        if !alive {
-                            return Completion::Normal(
-                                interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                            );
+                    // Decrement remaining
+                    state_next.borrow_mut().2 = remaining - 1.0;
+                    match interp.iterator_step_direct(&iter, &next_method) {
+                        Ok(Some(result)) => {
+                            let value = match interp.iterator_value(&result) {
+                                Ok(v) => v,
+                                Err(e) => return Err(Completion::Throw(e)),
+                            };
+                            // Don't close here — close on NEXT call when remaining hits 0
+                            Ok(HelperStep::Yield(value))
                         }
-                        if running {
-                            let err = interp.create_type_error("Iterator helper method called while iterator is already being iterated");
-                            return Completion::Throw(err);
-                        }
-                        state_next.borrow_mut().4 = true;
-                        let result = (|| {
-                            // Per spec: check remaining FIRST, close on the call AFTER exhaustion
-                            if remaining <= 0.0 {
-                                state_next.borrow_mut().3 = false;
-                                if let Err(e) = iterator_close_getter(interp, &iter) {
-                                    return Completion::Throw(e);
-                                }
-                                return Completion::Normal(
-                                    interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                                );
-                            }
-                            // Decrement remaining
-                            state_next.borrow_mut().2 = remaining - 1.0;
-                            match interp.iterator_step_direct(&iter, &next_method) {
-                                Ok(Some(result)) => {
-                                    let value = match interp.iterator_value(&result) {
-                                        Ok(v) => v,
-                                        Err(e) => return Completion::Throw(e),
-                                    };
-                                    // Don't close here — close on NEXT call when remaining hits 0
-                                    Completion::Normal(interp.create_iter_result_object(value, false))
-                                }
-                                Ok(None) => {
-                                    state_next.borrow_mut().3 = false;
-                                    Completion::Normal(
-                                        interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                                    )
-                                }
-                                Err(e) => {
-                                    state_next.borrow_mut().3 = false;
-                                    Completion::Throw(e)
-                                }
-                            }
-                        })();
-                        state_next.borrow_mut().4 = false;
-                        result
-                    },
-                ));
-
-                let state_ret = state.clone();
-                let return_fn = interp.create_function(JsFunction::native(
-                    "return".to_string(),
-                    0,
-                    move |interp, _this, _args| {
-                        let (iter, alive, running) = {
-                            let s = state_ret.borrow();
-                            (s.0.clone(), s.3, s.4)
-                        };
-                        if running {
-                            let err = interp.create_type_error("Iterator helper method called while iterator is already being iterated");
-                            return Completion::Throw(err);
-                        }
-                        state_ret.borrow_mut().4 = true;
-                        state_ret.borrow_mut().3 = false;
-                        let result = if alive {
-                            if let Err(e) = iterator_close_getter(interp, &iter) {
-                                Completion::Throw(e)
-                            } else {
-                                Completion::Normal(
-                                    interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                                )
-                            }
-                        } else {
-                            Completion::Normal(
-                                interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                            )
-                        };
-                        state_ret.borrow_mut().4 = false;
-                        result
-                    },
-                ));
-
-                let helper = interp.create_iterator_helper_object(next_fn, return_fn);
-                {
-                    let b = state.borrow();
-                    interp.set_helper_gc_roots(&helper, vec![b.0.clone(), b.1.clone()]);
-                }
-                Completion::Normal(helper)
-            },
-        );
+                        Ok(None) => Ok(HelperStep::Done),
+                        Err(e) => Err(Completion::Throw(e)),
+                    }
+                },
+                move |interp| {
+                    let iter = state_ret.borrow().0.clone();
+                    iterator_close_getter(interp, &iter)
+                },
+            );
+            Completion::Normal(helper)
+        });
 
         // drop(limit)
-        self.define_method(
-            iter_proto_id,
-            "drop",
-            1,
-            |interp, this, args| {
-                // Step 2: If this is not an Object, throw TypeError
-                if !this.is_object() {
-                    let err =
-                        interp.create_type_error("Iterator.prototype.drop called on non-object");
-                    return Completion::Throw(err);
+        self.define_method(iter_proto_id, "drop", 1, |interp, this, args| {
+            // Step 2: If this is not an Object, throw TypeError
+            if !this.is_object() {
+                let err = interp.create_type_error("Iterator.prototype.drop called on non-object");
+                return Completion::Throw(err);
+            }
+            // Step 3: numLimit = ToNumber(limit)
+            let limit_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+            let num_limit = match interp.to_number_value(&limit_val) {
+                Ok(n) => n,
+                Err(e) => {
+                    let e = close_iterator_for_error(interp, this, e);
+                    return Completion::Throw(e);
                 }
-                // Step 3: numLimit = ToNumber(limit)
-                let limit_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                let num_limit = match interp.to_number_value(&limit_val) {
-                    Ok(n) => n,
-                    Err(e) => {
-                        let e = close_iterator_for_error(interp, this, e);
-                        return Completion::Throw(e);
-                    }
-                };
-                // Step 4: If numLimit is NaN, throw RangeError
-                if num_limit.is_nan() {
-                    let err = interp
-                        .create_error("RangeError", "drop limit must be a non-negative number");
-                    let err = close_iterator_for_error(interp, this, err);
-                    return Completion::Throw(err);
-                }
-                // Step 5: If numLimit is finite and numLimit > 2**53 - 1, throw RangeError
-                if num_limit.is_finite() && num_limit > 9007199254740991.0 {
-                    let err = interp.create_error(
-                        "RangeError",
-                        "drop limit must not exceed 2**53 - 1",
-                    );
-                    let err = close_iterator_for_error(interp, this, err);
-                    return Completion::Throw(err);
-                }
-                // Step 6-7: integerLimit = ToIntegerOrInfinity, check < 0
-                let integer_limit = if num_limit.is_infinite() {
-                    num_limit
-                } else {
-                    num_limit.trunc()
-                };
-                if integer_limit < 0.0 {
-                    let err = interp
-                        .create_error("RangeError", "drop limit must be a non-negative number");
-                    let err = close_iterator_for_error(interp, this, err);
-                    return Completion::Throw(err);
-                }
-                // Step 7: GetIteratorDirect
-                let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
-                    Ok(v) => v,
-                    Err(e) => return Completion::Throw(e),
-                };
+            };
+            // Step 4: If numLimit is NaN, throw RangeError
+            if num_limit.is_nan() {
+                let err =
+                    interp.create_error("RangeError", "drop limit must be a non-negative number");
+                let err = close_iterator_for_error(interp, this, err);
+                return Completion::Throw(err);
+            }
+            // Step 5: If numLimit is finite and numLimit > 2**53 - 1, throw RangeError
+            if num_limit.is_finite() && num_limit > 9007199254740991.0 {
+                let err = interp.create_error("RangeError", "drop limit must not exceed 2**53 - 1");
+                let err = close_iterator_for_error(interp, this, err);
+                return Completion::Throw(err);
+            }
+            // Step 6-7: integerLimit = ToIntegerOrInfinity, check < 0
+            let integer_limit = if num_limit.is_infinite() {
+                num_limit
+            } else {
+                num_limit.trunc()
+            };
+            if integer_limit < 0.0 {
+                let err =
+                    interp.create_error("RangeError", "drop limit must be a non-negative number");
+                let err = close_iterator_for_error(interp, this, err);
+                return Completion::Throw(err);
+            }
+            // Step 7: GetIteratorDirect
+            let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
+                Ok(v) => v,
+                Err(e) => return Completion::Throw(e),
+            };
 
-                // state: (iter, next_method, to_skip, skipped, alive, running)
-                #[allow(clippy::type_complexity)]
-                let state: Rc<RefCell<(JsValue, JsValue, f64, bool, bool, bool)>> = Rc::new(
-                    RefCell::new((iter, next_method, integer_limit, false, true, false)),
-                );
+            // Captured iterator record, initial skip count and skip progress.
+            let state = Rc::new(RefCell::new((iter, next_method, integer_limit, false)));
+            let roots = {
+                let s = state.borrow();
+                vec![s.0.clone(), s.1.clone()]
+            };
+            let state_next = state.clone();
+            let state_ret = state;
+            let helper = interp.create_iterator_helper(
+                roots,
+                move |interp| {
+                    let (iter, next_method, to_skip, skipped) = {
+                        let s = state_next.borrow();
+                        (s.0.clone(), s.1.clone(), s.2, s.3)
+                    };
 
-                let state_next = state.clone();
-                let next_fn = interp.create_function(JsFunction::native(
-                    "next".to_string(),
-                    0,
-                    move |interp, _this, _args| {
-                        let (iter, next_method, to_skip, skipped, alive, running) = {
-                            let s = state_next.borrow();
-                            (s.0.clone(), s.1.clone(), s.2, s.3, s.4, s.5)
-                        };
-                        if !alive {
-                            return Completion::Normal(
-                                interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                            );
-                        }
-                        if running {
-                            let err = interp.create_type_error("Iterator helper method called while iterator is already being iterated");
-                            return Completion::Throw(err);
-                        }
-                        state_next.borrow_mut().5 = true;
-                        let result = (|| {
-                            if !skipped {
-                                let mut remaining = to_skip;
-                                while remaining > 0.0 {
-                                    match interp.iterator_step_direct(&iter, &next_method) {
-                                        Ok(Some(_)) => {
-                                            remaining -= 1.0;
-                                        }
-                                        Ok(None) => {
-                                            state_next.borrow_mut().4 = false;
-                                            return Completion::Normal(
-                                                interp.create_iter_result_object(
-                                                    JsValue::UNDEFINED,
-                                                    true,
-                                                ),
-                                            );
-                                        }
-                                        Err(e) => {
-                                            state_next.borrow_mut().4 = false;
-                                            return Completion::Throw(e);
-                                        }
-                                    }
-                                }
-                                state_next.borrow_mut().3 = true;
-                            }
+                    if !skipped {
+                        let mut remaining = to_skip;
+                        while remaining > 0.0 {
                             match interp.iterator_step_direct(&iter, &next_method) {
-                                Ok(Some(result)) => {
-                                    let value = match interp.iterator_value(&result) {
-                                        Ok(v) => v,
-                                        Err(e) => return Completion::Throw(e),
-                                    };
-                                    Completion::Normal(interp.create_iter_result_object(value, false))
+                                Ok(Some(_)) => {
+                                    remaining -= 1.0;
                                 }
                                 Ok(None) => {
-                                    state_next.borrow_mut().4 = false;
-                                    Completion::Normal(
-                                        interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                                    )
+                                    return Ok(HelperStep::Done);
                                 }
                                 Err(e) => {
-                                    state_next.borrow_mut().4 = false;
-                                    Completion::Throw(e)
+                                    return Err(Completion::Throw(e));
                                 }
                             }
-                        })();
-                        state_next.borrow_mut().5 = false;
-                        result
-                    },
-                ));
-
-                let state_ret = state.clone();
-                let return_fn = interp.create_function(JsFunction::native(
-                    "return".to_string(),
-                    0,
-                    move |interp, _this, _args| {
-                        let (iter, alive, running) = {
-                            let s = state_ret.borrow();
-                            (s.0.clone(), s.4, s.5)
-                        };
-                        if running {
-                            let err = interp.create_type_error("Iterator helper method called while iterator is already being iterated");
-                            return Completion::Throw(err);
                         }
-                        state_ret.borrow_mut().5 = true;
-                        state_ret.borrow_mut().4 = false;
-                        let result = if alive {
-                            if let Err(e) = iterator_close_getter(interp, &iter) {
-                                Completion::Throw(e)
-                            } else {
-                                Completion::Normal(
-                                    interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                                )
-                            }
-                        } else {
-                            Completion::Normal(
-                                interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                            )
-                        };
-                        state_ret.borrow_mut().5 = false;
-                        result
-                    },
-                ));
-
-                let helper = interp.create_iterator_helper_object(next_fn, return_fn);
-                {
-                    let b = state.borrow();
-                    interp.set_helper_gc_roots(&helper, vec![b.0.clone(), b.1.clone()]);
-                }
-                Completion::Normal(helper)
-            },
-        );
+                        state_next.borrow_mut().3 = true;
+                    }
+                    match interp.iterator_step_direct(&iter, &next_method) {
+                        Ok(Some(result)) => {
+                            let value = match interp.iterator_value(&result) {
+                                Ok(v) => v,
+                                Err(e) => return Err(Completion::Throw(e)),
+                            };
+                            Ok(HelperStep::Yield(value))
+                        }
+                        Ok(None) => Ok(HelperStep::Done),
+                        Err(e) => Err(Completion::Throw(e)),
+                    }
+                },
+                move |interp| {
+                    let iter = state_ret.borrow().0.clone();
+                    iterator_close_getter(interp, &iter)
+                },
+            );
+            Completion::Normal(helper)
+        });
 
         // chunks(chunkSize)
         self.define_method(iter_proto_id, "chunks", 1, |interp, this, args| {
@@ -2046,26 +1621,22 @@ impl Interpreter {
 
             let chunk_size = chunk_size as usize;
             let buffer = interp.create_array(vec![]);
-            // state: (iter, next_method, rooted buffer, alive)
-            #[allow(clippy::type_complexity)]
-            let state: Rc<RefCell<(JsValue, JsValue, JsValue, bool)>> =
-                Rc::new(RefCell::new((iter, next_method, buffer, true)));
 
+            // Captured iterator record and GC-traced accumulation buffer.
+            let state = Rc::new(RefCell::new((iter, next_method, buffer)));
+            let roots = {
+                let s = state.borrow();
+                vec![s.0.clone(), s.1.clone(), s.2.clone()]
+            };
             let state_next = state.clone();
-            let next_fn = interp.create_function(JsFunction::native(
-                "next".to_string(),
-                0,
-                move |interp, _this, _args| {
-                    let (iter, next_method, buffer, alive) = {
+            let state_ret = state;
+            let helper = interp.create_iterator_helper(
+                roots,
+                move |interp| {
+                    let (iter, next_method, buffer) = {
                         let s = state_next.borrow();
-                        (s.0.clone(), s.1.clone(), s.2.clone(), s.3)
+                        (s.0.clone(), s.1.clone(), s.2.clone())
                     };
-                    if !alive {
-                        return Completion::Normal(
-                            interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                        );
-                    }
-
                     loop {
                         match interp.iterator_step_value_direct(&iter, &next_method) {
                             Ok(Some(value)) => {
@@ -2075,55 +1646,28 @@ impl Interpreter {
                                 });
                                 if let Some(values) = values {
                                     let chunk = interp.create_array(values);
-                                    return Completion::Normal(
-                                        interp.create_iter_result_object(chunk, false),
-                                    );
+                                    return Ok(HelperStep::Yield(chunk));
                                 }
                             }
                             Ok(None) => {
-                                state_next.borrow_mut().3 = false;
                                 let values = interp.with_array_elements_mut(&buffer, |e| e.take());
                                 if values.is_empty() {
-                                    return Completion::Normal(
-                                        interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                                    );
+                                    return Ok(HelperStep::Done);
                                 }
                                 let chunk = interp.create_array(values);
-                                return Completion::Normal(
-                                    interp.create_iter_result_object(chunk, false),
-                                );
+                                return Ok(HelperStep::FinalYield(chunk));
                             }
                             Err(e) => {
-                                state_next.borrow_mut().3 = false;
-                                return Completion::Throw(e);
+                                return Err(Completion::Throw(e));
                             }
                         }
                     }
                 },
-            ));
-
-            let state_ret = state.clone();
-            let return_fn = interp.create_function(JsFunction::native(
-                "return".to_string(),
-                0,
-                move |interp, _this, _args| {
-                    let (iter, alive) = {
-                        let s = state_ret.borrow();
-                        (s.0.clone(), s.3)
-                    };
-                    state_ret.borrow_mut().3 = false;
-                    if alive && let Err(e) = iterator_close_getter(interp, &iter) {
-                        return Completion::Throw(e);
-                    }
-                    Completion::Normal(interp.create_iter_result_object(JsValue::UNDEFINED, true))
+                move |interp| {
+                    let iter = state_ret.borrow().0.clone();
+                    iterator_close_getter(interp, &iter)
                 },
-            ));
-
-            let helper = interp.create_iterator_helper_object(next_fn, return_fn);
-            {
-                let s = state.borrow();
-                interp.set_helper_gc_roots(&helper, vec![s.0.clone(), s.1.clone(), s.2.clone()]);
-            }
+            );
             Completion::Normal(helper)
         });
 
@@ -2174,26 +1718,22 @@ impl Interpreter {
 
             let window_size = window_size as usize;
             let buffer = interp.create_array(vec![]);
-            // state: (iter, next_method, rooted buffer, alive)
-            #[allow(clippy::type_complexity)]
-            let state: Rc<RefCell<(JsValue, JsValue, JsValue, bool)>> =
-                Rc::new(RefCell::new((iter, next_method, buffer, true)));
 
+            // Captured iterator record and GC-traced accumulation buffer.
+            let state = Rc::new(RefCell::new((iter, next_method, buffer)));
+            let roots = {
+                let s = state.borrow();
+                vec![s.0.clone(), s.1.clone(), s.2.clone()]
+            };
             let state_next = state.clone();
-            let next_fn = interp.create_function(JsFunction::native(
-                "next".to_string(),
-                0,
-                move |interp, _this, _args| {
-                    let (iter, next_method, buffer, alive) = {
+            let state_ret = state;
+            let helper = interp.create_iterator_helper(
+                roots,
+                move |interp| {
+                    let (iter, next_method, buffer) = {
                         let s = state_next.borrow();
-                        (s.0.clone(), s.1.clone(), s.2.clone(), s.3)
+                        (s.0.clone(), s.1.clone(), s.2.clone())
                     };
-                    if !alive {
-                        return Completion::Normal(
-                            interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                        );
-                    }
-
                     loop {
                         match interp.iterator_step_value_direct(&iter, &next_method) {
                             Ok(Some(value)) => {
@@ -2206,249 +1746,158 @@ impl Interpreter {
                                 });
                                 if let Some(values) = values {
                                     let window = interp.create_array(values);
-                                    return Completion::Normal(
-                                        interp.create_iter_result_object(window, false),
-                                    );
+                                    return Ok(HelperStep::Yield(window));
                                 }
                             }
                             Ok(None) => {
-                                state_next.borrow_mut().3 = false;
                                 let values = interp.with_array_elements_mut(&buffer, |e| e.take());
                                 if allow_partial && !values.is_empty() && values.len() < window_size
                                 {
                                     let window = interp.create_array(values);
-                                    return Completion::Normal(
-                                        interp.create_iter_result_object(window, false),
-                                    );
+                                    return Ok(HelperStep::FinalYield(window));
                                 }
-                                return Completion::Normal(
-                                    interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                                );
+                                return Ok(HelperStep::Done);
                             }
                             Err(e) => {
-                                state_next.borrow_mut().3 = false;
-                                return Completion::Throw(e);
+                                return Err(Completion::Throw(e));
                             }
                         }
                     }
                 },
-            ));
-
-            let state_ret = state.clone();
-            let return_fn = interp.create_function(JsFunction::native(
-                "return".to_string(),
-                0,
-                move |interp, _this, _args| {
-                    let (iter, alive) = {
-                        let s = state_ret.borrow();
-                        (s.0.clone(), s.3)
-                    };
-                    state_ret.borrow_mut().3 = false;
-                    if alive && let Err(e) = iterator_close_getter(interp, &iter) {
-                        return Completion::Throw(e);
-                    }
-                    Completion::Normal(interp.create_iter_result_object(JsValue::UNDEFINED, true))
+                move |interp| {
+                    let iter = state_ret.borrow().0.clone();
+                    iterator_close_getter(interp, &iter)
                 },
-            ));
-
-            let helper = interp.create_iterator_helper_object(next_fn, return_fn);
-            {
-                let s = state.borrow();
-                interp.set_helper_gc_roots(&helper, vec![s.0.clone(), s.1.clone(), s.2.clone()]);
-            }
+            );
             Completion::Normal(helper)
         });
 
         // flatMap(mapper)
-        self.define_method(
-            iter_proto_id,
-            "flatMap",
-            1,
-            |interp, this, args| {
-                if !this.is_object() {
-                    let err = interp.create_type_error("Iterator.prototype.flatMap called on non-object");
-                    return Completion::Throw(err);
-                }
-                let (mapper, iter, next_method) =
-                    propagate!(require_callable_arg(interp, this, args, "mapper is not a function"));
+        self.define_method(iter_proto_id, "flatMap", 1, |interp, this, args| {
+            if !this.is_object() {
+                let err =
+                    interp.create_type_error("Iterator.prototype.flatMap called on non-object");
+                return Completion::Throw(err);
+            }
+            let (mapper, iter, next_method) = propagate!(require_callable_arg(
+                interp,
+                this,
+                args,
+                "mapper is not a function"
+            ));
 
-                let inner_roots = RootedPair::new(interp);
-                // state: (outer_iter, outer_next, mapper, counter, alive, running)
-                #[allow(clippy::type_complexity)]
-                let state: Rc<RefCell<(JsValue, JsValue, JsValue, f64, bool, bool)>> =
-                    Rc::new(RefCell::new((iter, next_method, mapper, 0.0, true, false)));
+            let inner_roots = RootedPair::new(interp);
 
-                let state_next = state.clone();
-                let roots_next = inner_roots.clone();
-                let next_fn = interp.create_function(JsFunction::native(
-                    "next".to_string(),
-                    0,
-                    move |interp, _this, _args| {
-                        let alive = state_next.borrow().4;
-                        let running = state_next.borrow().5;
-                        if !alive {
-                            return Completion::Normal(
-                                interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                            );
-                        }
-                        if running {
-                            let err = interp.create_type_error("Iterator helper method called while iterator is already being iterated");
-                            return Completion::Throw(err);
-                        }
-                        state_next.borrow_mut().5 = true;
-                        let result = (|| {
-                            loop {
-                                let (outer_iter, outer_next, mapper, counter) = {
-                                    let s = state_next.borrow();
-                                    (s.0.clone(), s.1.clone(), s.2.clone(), s.3)
-                                };
+            // Captured outer iterator record, mapper and next callback index.
+            let state = Rc::new(RefCell::new((iter, next_method, mapper, 0.0)));
+            let roots = {
+                let s = state.borrow();
+                vec![s.0.clone(), s.1.clone(), s.2.clone(), inner_roots.root()]
+            };
+            let state_next = state.clone();
+            let roots_next = inner_roots.clone();
+            let state_ret = state;
+            let roots_ret = inner_roots;
+            let helper = interp.create_iterator_helper(
+                roots,
+                move |interp| {
+                    loop {
+                        let (outer_iter, outer_next, mapper, counter) = {
+                            let s = state_next.borrow();
+                            (s.0.clone(), s.1.clone(), s.2.clone(), s.3)
+                        };
 
-                                let inner = roots_next.get(interp);
+                        let inner = roots_next.get(interp);
 
-                                // If we have an inner iterator, drain it
-                                if let Some((ref ii, ref in_next)) = inner {
-                                    match interp.iterator_step_direct(ii, in_next) {
-                                        Ok(Some(result)) => {
-                                            let value = match interp.iterator_value(&result) {
-                                                Ok(v) => v,
-                                                Err(e) => {
-                                                    state_next.borrow_mut().4 = false;
-                                                    let e = close_iterator_for_error(interp, &outer_iter, e);
-                                                    return Completion::Throw(e);
-                                                }
-                                            };
-                                            return Completion::Normal(
-                                                interp.create_iter_result_object(value, false),
-                                            );
-                                        }
-                                        Ok(None) => {
-                                            roots_next.clear(interp);
-                                            continue;
-                                        }
+                        // If we have an inner iterator, drain it
+                        if let Some((ref ii, ref in_next)) = inner {
+                            match interp.iterator_step_direct(ii, in_next) {
+                                Ok(Some(result)) => {
+                                    let value = match interp.iterator_value(&result) {
+                                        Ok(v) => v,
                                         Err(e) => {
-                                            state_next.borrow_mut().4 = false;
-                                            let e = close_iterator_for_error(interp, &outer_iter, e);
-                                            return Completion::Throw(e);
+                                            let e =
+                                                close_iterator_for_error(interp, &outer_iter, e);
+                                            return Err(Completion::Throw(e));
                                         }
-                                    }
+                                    };
+                                    return Ok(HelperStep::Yield(value));
                                 }
-
-                                // Get next from outer
-                                match interp.iterator_step_direct(&outer_iter, &outer_next) {
-                                    Ok(Some(result)) => {
-                                        let value = match interp.iterator_value(&result) {
-                                            Ok(v) => v,
-                                            Err(e) => return Completion::Throw(e),
-                                        };
-                                        let mapped = interp.call_function(
-                                            &mapper,
-                                            &JsValue::UNDEFINED,
-                                            &[value, JsValue::number(counter)],
-                                        );
-                                        state_next.borrow_mut().3 = counter + 1.0;
-                                        match mapped {
-                                            Completion::Normal(mapped_val) => {
-                                                match get_iterator_flattenable(interp, &mapped_val, true) {
-                                                    Ok((new_inner, inner_next_method)) => {
-                                                        roots_next.set(
-                                                            interp,
-                                                            new_inner,
-                                                            inner_next_method,
-                                                        );
-                                                        continue;
-                                                    }
-                                                    Err(e) => {
-                                                        state_next.borrow_mut().4 = false;
-                                                        let e = close_iterator_for_error(interp, &outer_iter, e);
-                                                        return Completion::Throw(e);
-                                                    }
-                                                }
-                                            }
-                                            Completion::Throw(e) => {
-                                                state_next.borrow_mut().4 = false;
-                                                let e = close_iterator_for_error(interp, &outer_iter, e);
-                                                return Completion::Throw(e);
-                                            }
-                                            _ => {
-                                                state_next.borrow_mut().4 = false;
-                                                return Completion::Normal(
-                                                    interp.create_iter_result_object(
-                                                        JsValue::UNDEFINED,
-                                                        true,
-                                                    ),
-                                                );
-                                            }
-                                        }
-                                    }
-                                    Ok(None) => {
-                                        state_next.borrow_mut().4 = false;
-                                        return Completion::Normal(
-                                            interp
-                                                .create_iter_result_object(JsValue::UNDEFINED, true),
-                                        );
-                                    }
-                                    Err(e) => {
-                                        state_next.borrow_mut().4 = false;
-                                        return Completion::Throw(e);
-                                    }
+                                Ok(None) => {
+                                    roots_next.clear(interp);
+                                    continue;
+                                }
+                                Err(e) => {
+                                    let e = close_iterator_for_error(interp, &outer_iter, e);
+                                    return Err(Completion::Throw(e));
                                 }
                             }
-                        })();
-                        state_next.borrow_mut().5 = false;
-                        result
-                    },
-                ));
-
-                let state_ret = state.clone();
-                let roots_ret = inner_roots.clone();
-                let return_fn = interp.create_function(JsFunction::native(
-                    "return".to_string(),
-                    0,
-                    move |interp, _this, _args| {
-                        let (outer_iter, alive, running) = {
-                            let s = state_ret.borrow();
-                            (s.0.clone(), s.4, s.5)
-                        };
-                        let inner_iter = roots_ret.get(interp).map(|(iter, _)| iter);
-                        if running {
-                            let err = interp.create_type_error("Iterator helper method called while iterator is already being iterated");
-                            return Completion::Throw(err);
                         }
-                        state_ret.borrow_mut().5 = true;
-                        state_ret.borrow_mut().4 = false;
-                        let result = if alive {
-                            if let Some(ref ii) = inner_iter {
-                                let _ = iterator_close_getter(interp, ii);
-                            }
-                            if let Err(e) = iterator_close_getter(interp, &outer_iter) {
-                                Completion::Throw(e)
-                            } else {
-                                Completion::Normal(
-                                    interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                                )
-                            }
-                        } else {
-                            Completion::Normal(
-                                interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                            )
-                        };
-                        roots_ret.clear(interp);
-                        state_ret.borrow_mut().5 = false;
-                        result
-                    },
-                ));
 
-                let helper = interp.create_iterator_helper_object(next_fn, return_fn);
-                {
-                    let b = state.borrow();
-                    interp.set_helper_gc_roots(
-                        &helper,
-                        vec![b.0.clone(), b.1.clone(), b.2.clone(), inner_roots.root()],
-                    );
-                }
-                Completion::Normal(helper)
-            },
-        );
+                        // Get next from outer
+                        match interp.iterator_step_direct(&outer_iter, &outer_next) {
+                            Ok(Some(result)) => {
+                                let value = match interp.iterator_value(&result) {
+                                    Ok(v) => v,
+                                    Err(e) => return Err(Completion::Throw(e)),
+                                };
+                                let mapped = interp.call_function(
+                                    &mapper,
+                                    &JsValue::UNDEFINED,
+                                    &[value, JsValue::number(counter)],
+                                );
+                                state_next.borrow_mut().3 = counter + 1.0;
+                                match mapped {
+                                    Completion::Normal(mapped_val) => {
+                                        match get_iterator_flattenable(interp, &mapped_val, true) {
+                                            Ok((new_inner, inner_next_method)) => {
+                                                roots_next.set(
+                                                    interp,
+                                                    new_inner,
+                                                    inner_next_method,
+                                                );
+                                                continue;
+                                            }
+                                            Err(e) => {
+                                                let e = close_iterator_for_error(
+                                                    interp,
+                                                    &outer_iter,
+                                                    e,
+                                                );
+                                                return Err(Completion::Throw(e));
+                                            }
+                                        }
+                                    }
+                                    Completion::Throw(e) => {
+                                        let e = close_iterator_for_error(interp, &outer_iter, e);
+                                        return Err(Completion::Throw(e));
+                                    }
+                                    _ => {
+                                        return Ok(HelperStep::Done);
+                                    }
+                                }
+                            }
+                            Ok(None) => {
+                                return Ok(HelperStep::Done);
+                            }
+                            Err(e) => {
+                                return Err(Completion::Throw(e));
+                            }
+                        }
+                    }
+                },
+                move |interp| {
+                    let outer_iter = state_ret.borrow().0.clone();
+                    if let Some((inner_iter, _)) = roots_ret.get(interp) {
+                        let _ = iterator_close_getter(interp, &inner_iter);
+                    }
+                    let result = iterator_close_getter(interp, &outer_iter);
+                    roots_ret.clear(interp);
+                    result
+                },
+            );
+            Completion::Normal(helper)
+        });
     }
 
     fn setup_iterator_static_methods(&mut self, iterator_ctor: &JsValue) {
@@ -2490,190 +1939,144 @@ impl Interpreter {
             "concat".to_string(),
             1,
             |interp, _this, args| {
-                // Validate all args are iterable first (must be objects with @@iterator)
-                let sym_key = interp.get_symbol_iterator_key();
-                let mut iterables: Vec<(JsValue, JsValue)> = Vec::new();
-                for arg in args {
-                    // Per spec: each argument must NOT be a primitive (reject-primitives)
-                    if !arg.is_object() {
-                        let err = interp.create_type_error("value is not iterable");
-                        return Completion::Throw(err);
-                    }
-                    if let Some(ref key) = sym_key {
-                        let iter_fn = if let Some(arg_id) = arg.as_object_id() {
-                            match interp.get_object_property(arg_id, key, arg) {
-                                Completion::Normal(v) => v,
-                                Completion::Throw(e) => return Completion::Throw(e),
-                                _ => JsValue::UNDEFINED,
-                            }
-                        } else {
-                            JsValue::UNDEFINED
-                        };
-                        if iter_fn.is_nullish() {
+                interp.with_gc_root_scope(|interp| {
+                    // Validate all args are iterable first (must be objects with @@iterator)
+                    let sym_key = interp.get_symbol_iterator_key();
+                    let mut iterables: Vec<(JsValue, JsValue)> = Vec::new();
+                    for arg in args {
+                        // Per spec: each argument must NOT be a primitive (reject-primitives)
+                        if !arg.is_object() {
                             let err = interp.create_type_error("value is not iterable");
                             return Completion::Throw(err);
                         }
-                        // Verify it's callable
-                        let is_callable = if let Some(iter_fn_id) = iter_fn.as_object_id() {
-                            interp
-                                .get_object_cell(iter_fn_id)
-                                .map(|od| od.borrow().callable.is_some())
-                                .unwrap_or(false)
+                        if let Some(ref key) = sym_key {
+                            let iter_fn = if let Some(arg_id) = arg.as_object_id() {
+                                match interp.get_object_property(arg_id, key, arg) {
+                                    Completion::Normal(v) => v,
+                                    Completion::Throw(e) => return Completion::Throw(e),
+                                    _ => JsValue::UNDEFINED,
+                                }
+                            } else {
+                                JsValue::UNDEFINED
+                            };
+                            if iter_fn.is_nullish() {
+                                let err = interp.create_type_error("value is not iterable");
+                                return Completion::Throw(err);
+                            }
+                            // Verify it's callable
+                            let is_callable = if let Some(iter_fn_id) = iter_fn.as_object_id() {
+                                interp
+                                    .get_object_cell(iter_fn_id)
+                                    .map(|od| od.borrow().callable.is_some())
+                                    .unwrap_or(false)
+                            } else {
+                                false
+                            };
+                            if !is_callable {
+                                let err =
+                                    interp.create_type_error("Symbol.iterator is not a function");
+                                return Completion::Throw(err);
+                            }
+                            // Later @@iterator getters execute JavaScript before
+                            // the helper can pin these captured methods.
+                            interp.gc_root_value(&iter_fn);
+                            iterables.push((arg.clone(), iter_fn));
                         } else {
-                            false
-                        };
-                        if !is_callable {
-                            let err = interp.create_type_error("Symbol.iterator is not a function");
+                            let err = interp.create_type_error("value is not iterable");
                             return Completion::Throw(err);
                         }
-                        iterables.push((arg.clone(), iter_fn));
-                    } else {
-                        let err = interp.create_type_error("value is not iterable");
-                        return Completion::Throw(err);
                     }
-                }
 
-                let current_roots = RootedPair::new(interp);
-                // state: (iterables, current_index, alive, running)
-                #[allow(clippy::type_complexity)]
-                let state: Rc<RefCell<(Vec<(JsValue, JsValue)>, usize, bool, bool)>> =
-                    Rc::new(RefCell::new((iterables, 0, true, false)));
+                    let current_roots = RootedPair::new(interp);
 
-                let state_next = state.clone();
-                let roots_next = current_roots.clone();
-                let next_fn = interp.create_function(JsFunction::native(
-                    "next".to_string(),
-                    0,
-                    move |interp, _this, _args| {
-                        let alive = state_next.borrow().2;
-                        let running = state_next.borrow().3;
-                        if !alive {
-                            return Completion::Normal(
-                                interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                            );
+                    // Lazily opened iterables and the current iterable index.
+                    let state = Rc::new(RefCell::new((iterables, 0)));
+                    let roots = {
+                        let s = state.borrow();
+                        let mut roots = Vec::with_capacity(s.0.len() * 2 + 1);
+                        for (iterable, method) in &s.0 {
+                            roots.push(iterable.clone());
+                            roots.push(method.clone());
                         }
-                        if running {
-                            let err = interp.create_type_error("Iterator helper method called while iterator is already being iterated");
-                            return Completion::Throw(err);
-                        }
-                        state_next.borrow_mut().3 = true;
-                        let result = (|| {
-                        loop {
-                            let idx = state_next.borrow().1;
+                        roots.push(current_roots.root());
+                        roots
+                    };
+                    let state_next = state.clone();
+                    let roots_next = current_roots.clone();
+                    let roots_ret = current_roots;
+                    let helper = interp.create_iterator_helper(
+                        roots,
+                        move |interp| {
+                            loop {
+                                let idx = state_next.borrow().1;
 
-                            // If we have a current iterator, try getting next
-                            if let Some((ref ci, ref cn)) = roots_next.get(interp) {
-                                match interp.iterator_step_direct(ci, cn) {
-                                    Ok(Some(result)) => {
-                                        let value = match interp.iterator_value(&result) {
-                                            Ok(v) => v,
-                                            Err(e) => return Completion::Throw(e),
-                                        };
-                                        return Completion::Normal(
-                                            interp.create_iter_result_object(value, false),
-                                        );
+                                // If we have a current iterator, try getting next
+                                if let Some((ref ci, ref cn)) = roots_next.get(interp) {
+                                    match interp.iterator_step_direct(ci, cn) {
+                                        Ok(Some(result)) => {
+                                            let value = match interp.iterator_value(&result) {
+                                                Ok(v) => v,
+                                                Err(e) => return Err(Completion::Throw(e)),
+                                            };
+                                            return Ok(HelperStep::Yield(value));
+                                        }
+                                        Ok(None) => {
+                                            // Current exhausted, move to next
+                                            state_next.borrow_mut().1 = idx + 1;
+                                            roots_next.clear(interp);
+                                            continue;
+                                        }
+                                        Err(e) => {
+                                            return Err(Completion::Throw(e));
+                                        }
                                     }
-                                    Ok(None) => {
-                                        // Current exhausted, move to next
-                                        state_next.borrow_mut().1 = idx + 1;
-                                        roots_next.clear(interp);
+                                }
+
+                                // Open next iterable
+                                let Some((iterable, iter_fn)) =
+                                    state_next.borrow().0.get(idx).cloned()
+                                else {
+                                    return Ok(HelperStep::Done);
+                                };
+                                match interp.call_function(&iter_fn, &iterable, &[]) {
+                                    Completion::Normal(new_iter) => {
+                                        if !new_iter.is_object() {
+                                            let err = interp.create_type_error(
+                                                "Result of Symbol.iterator is not an object",
+                                            );
+                                            return Err(Completion::Throw(err));
+                                        }
+                                        let next_method =
+                                            match get_iterator_direct_getter(interp, &new_iter) {
+                                                Ok((_, nm)) => nm,
+                                                Err(e) => {
+                                                    return Err(Completion::Throw(e));
+                                                }
+                                            };
+                                        roots_next.set(interp, new_iter, next_method);
                                         continue;
                                     }
-                                    Err(e) => {
-                                        state_next.borrow_mut().2 = false;
-                                        return Completion::Throw(e);
+                                    Completion::Throw(e) => {
+                                        return Err(Completion::Throw(e));
+                                    }
+                                    _ => {
+                                        return Ok(HelperStep::Done);
                                     }
                                 }
                             }
-
-                            // Open next iterable
-                            let Some((iterable, iter_fn)) = state_next.borrow().0.get(idx).cloned()
-                            else {
-                                state_next.borrow_mut().2 = false;
-                                return Completion::Normal(
-                                    interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                                );
+                        },
+                        move |interp| {
+                            let result = if let Some((current_iter, _)) = roots_ret.get(interp) {
+                                iterator_close_getter(interp, &current_iter)
+                            } else {
+                                Ok(())
                             };
-                            match interp.call_function(&iter_fn, &iterable, &[]) {
-                                Completion::Normal(new_iter) => {
-                                    if !new_iter.is_object() {
-                                        state_next.borrow_mut().2 = false;
-                                        let err = interp.create_type_error(
-                                            "Result of Symbol.iterator is not an object",
-                                        );
-                                        return Completion::Throw(err);
-                                    }
-                                    let next_method =
-                                        match get_iterator_direct_getter(interp, &new_iter) {
-                                            Ok((_, nm)) => nm,
-                                            Err(e) => {
-                                                state_next.borrow_mut().2 = false;
-                                                return Completion::Throw(e);
-                                            }
-                                        };
-                                    roots_next.set(interp, new_iter, next_method);
-                                    continue;
-                                }
-                                Completion::Throw(e) => {
-                                    state_next.borrow_mut().2 = false;
-                                    return Completion::Throw(e);
-                                }
-                                _ => {
-                                    state_next.borrow_mut().2 = false;
-                                    return Completion::Normal(
-                                        interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                                    );
-                                }
-                            }
-                        }
-                        })();
-                        state_next.borrow_mut().3 = false;
-                        result
-                    },
-                ));
-
-                let state_ret = state.clone();
-                let roots_ret = current_roots.clone();
-                let return_fn = interp.create_function(JsFunction::native(
-                    "return".to_string(),
-                    0,
-                    move |interp, _this, _args| {
-                        let (alive, running) = {
-                            let s = state_ret.borrow();
-                            (s.2, s.3)
-                        };
-                        if running {
-                            let err = interp.create_type_error("Iterator helper method called while iterator is already being iterated");
-                            return Completion::Throw(err);
-                        }
-                        let cur_iter = roots_ret.get(interp).map(|(iter, _)| iter);
-                        state_ret.borrow_mut().3 = true; // set running
-                        state_ret.borrow_mut().2 = false;
-                        let result = if alive
-                            && let Some(ref ci) = cur_iter
-                            && let Err(e) = iterator_close_getter(interp, ci)
-                        {
-                            Completion::Throw(e)
-                        } else {
-                            Completion::Normal(
-                                interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                            )
-                        };
-                        roots_ret.clear(interp);
-                        state_ret.borrow_mut().3 = false; // clear running
-                        result
-                    },
-                ));
-
-                let helper = interp.create_iterator_helper_object(next_fn, return_fn);
-                {
-                    let b = state.borrow();
-                    let mut roots = Vec::with_capacity(b.0.len() * 2 + 1);
-                    for (io, nm) in &b.0 { roots.push(io.clone()); roots.push(nm.clone()); }
-                    roots.push(current_roots.root());
-                    interp.set_helper_gc_roots(&helper, roots);
-                }
-                Completion::Normal(helper)
+                            roots_ret.clear(interp);
+                            result
+                        },
+                    );
+                    Completion::Normal(helper)
+                })
             },
         ));
 
@@ -2868,73 +2271,43 @@ impl Interpreter {
                         vec![JsValue::UNDEFINED; iter_count]
                     };
 
-                    // State: (iters, exhausted, mode, padding, alive)
-                    #[allow(clippy::type_complexity)]
-                    let state: Rc<
-                        RefCell<(
-                            Vec<(JsValue, JsValue)>,
-                            Vec<bool>,
-                            String,
-                            Vec<JsValue>,
-                            bool,
-                        )>,
-                    > = Rc::new(RefCell::new((
+                    // Per-source exhaustion remains independent of helper completion.
+                    let state: ZipState = Rc::new(RefCell::new((
                         iters,
                         vec![false; iter_count],
                         mode,
                         padding_values,
-                        true,
                     )));
-
+                    let roots = {
+                        let s = state.borrow();
+                        let mut roots = Vec::with_capacity(s.0.len() * 2 + s.3.len());
+                        for (iter, next) in &s.0 {
+                            roots.push(iter.clone());
+                            roots.push(next.clone());
+                        }
+                        roots.extend(s.3.iter().cloned());
+                        roots
+                    };
                     let state_next = state.clone();
-                    let next_fn = interp.create_function(JsFunction::native(
-                        "next".to_string(),
-                        0,
-                        move |interp, _this, _args| {
+                    let helper = interp.create_iterator_helper(
+                        roots,
+                        move |interp| {
                             interp.with_gc_root_scope(|interp| zip_next_inner(interp, &state_next))
                         },
-                    ));
-
-                    let state_ret = state.clone();
-                    let return_fn = interp.create_function(JsFunction::native(
-                        "return".to_string(),
-                        0,
-                        move |interp, _this, _args| {
-                            let (ref iters, ref exhausted, alive) = {
-                                let s = state_ret.borrow();
-                                (s.0.clone(), s.1.clone(), s.4)
+                        move |interp| {
+                            let (iters, exhausted) = {
+                                let s = state.borrow();
+                                (s.0.clone(), s.1.clone())
                             };
-                            state_ret.borrow_mut().4 = false;
-                            if alive {
-                                let open: Vec<(JsValue, JsValue)> = iters
-                                    .iter()
-                                    .enumerate()
-                                    .filter(|(i, _)| !exhausted[*i])
-                                    .map(|(_, pair)| pair.clone())
-                                    .collect();
-                                if let Err(e) = iterator_close_all(interp, &open, Ok(())) {
-                                    return Completion::Throw(e);
-                                }
-                            }
-                            Completion::Normal(
-                                interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                            )
+                            let open: Vec<_> = iters
+                                .into_iter()
+                                .enumerate()
+                                .filter(|(i, _)| !exhausted[*i])
+                                .map(|(_, pair)| pair)
+                                .collect();
+                            iterator_close_all(interp, &open, Ok(()))
                         },
-                    ));
-
-                    let helper = interp.create_iterator_helper_object(next_fn, return_fn);
-                    {
-                        let b = state.borrow();
-                        let mut roots = Vec::with_capacity(b.0.len() * 2 + b.3.len());
-                        for (io, nm) in &b.0 {
-                            roots.push(io.clone());
-                            roots.push(nm.clone());
-                        }
-                        for pad in &b.3 {
-                            roots.push(pad.clone());
-                        }
-                        interp.set_helper_gc_roots(&helper, roots);
-                    }
+                    );
                     Completion::Normal(helper)
                 })
             },
@@ -3146,60 +2519,39 @@ impl Interpreter {
                         vec![false; iter_count],
                         mode,
                         padding_values,
-                        true,
                     )));
-
+                    let roots = {
+                        let s = state.borrow();
+                        let mut roots = Vec::with_capacity(s.1.len() * 2 + s.4.len());
+                        for (iter, next) in &s.1 {
+                            roots.push(iter.clone());
+                            roots.push(next.clone());
+                        }
+                        roots.extend(s.4.iter().cloned());
+                        roots
+                    };
                     let state_next = state.clone();
-                    let next_fn = interp.create_function(JsFunction::native(
-                        "next".to_string(),
-                        0,
-                        move |interp, _this, _args| {
+                    let helper = interp.create_iterator_helper(
+                        roots,
+                        move |interp| {
                             interp.with_gc_root_scope(|interp| {
                                 zip_keyed_next_inner(interp, &state_next)
                             })
                         },
-                    ));
-
-                    let state_ret = state.clone();
-                    let return_fn = interp.create_function(JsFunction::native(
-                        "return".to_string(),
-                        0,
-                        move |interp, _this, _args| {
-                            let (ref iters, ref exhausted, alive) = {
-                                let s = state_ret.borrow();
-                                (s.1.clone(), s.2.clone(), s.5)
+                        move |interp| {
+                            let (iters, exhausted) = {
+                                let s = state.borrow();
+                                (s.1.clone(), s.2.clone())
                             };
-                            state_ret.borrow_mut().5 = false;
-                            if alive {
-                                let open: Vec<(JsValue, JsValue)> = iters
-                                    .iter()
-                                    .enumerate()
-                                    .filter(|(i, _)| !exhausted[*i])
-                                    .map(|(_, pair)| pair.clone())
-                                    .collect();
-                                if let Err(e) = iterator_close_all(interp, &open, Ok(())) {
-                                    return Completion::Throw(e);
-                                }
-                            }
-                            Completion::Normal(
-                                interp.create_iter_result_object(JsValue::UNDEFINED, true),
-                            )
+                            let open: Vec<_> = iters
+                                .into_iter()
+                                .enumerate()
+                                .filter(|(i, _)| !exhausted[*i])
+                                .map(|(_, pair)| pair)
+                                .collect();
+                            iterator_close_all(interp, &open, Ok(()))
                         },
-                    ));
-
-                    let helper = interp.create_iterator_helper_object(next_fn, return_fn);
-                    {
-                        let b = state.borrow();
-                        let mut roots = Vec::with_capacity(b.1.len() * 2 + b.4.len());
-                        for (io, nm) in &b.1 {
-                            roots.push(io.clone());
-                            roots.push(nm.clone());
-                        }
-                        for pad in &b.4 {
-                            roots.push(pad.clone());
-                        }
-                        interp.set_helper_gc_roots(&helper, roots);
-                    }
+                    );
                     Completion::Normal(helper)
                 })
             },

@@ -2694,12 +2694,17 @@ pub(crate) enum NamedStore {
     Bail,
 }
 
-/// Iterator-helper or wrap-delegation slot data. The two cases are mutually
-/// exclusive at the object level — an `Iterator.from(x)` wrapper carries
-/// `Delegation`, while every `Iterator.prototype.{map,filter,take,drop,flatMap}`
-/// result carries `Helper`. Before this bundle they shared the same object via
-/// disjoint `Option` fields (`wrap_iter_record` vs `helper_*`), and the
-/// disjunction was enforced only by convention.
+/// Lifecycle owned by `builtins/iterators/lifecycle`, shared with its dispatch.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum IteratorHelperPhase {
+    SuspendedStart,
+    SuspendedYield,
+    FinalYield,
+    Executing,
+    Completed,
+}
+
+/// Mutually exclusive Iterator.from delegation and lazy-helper slot data.
 #[derive(Clone, Debug)]
 pub(crate) enum IterHelperData {
     Delegation {
@@ -2709,7 +2714,7 @@ pub(crate) enum IterHelperData {
     Helper {
         next: JsValue,
         return_closure: JsValue,
-        gen_state: Rc<Cell<u8>>,
+        phase: Rc<Cell<IteratorHelperPhase>>,
     },
 }
 
