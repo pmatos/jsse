@@ -58,7 +58,7 @@ pub(crate) struct PerfCounters {
     /// bodies. `ast_units()` covers script/generator/module/eval work too, so
     /// dividing it by `body_ast` — which counts function invocations only —
     /// mixed populations: one 2-unit function call beside a generator reported
-    /// an average of 1,066 units per body (#537 review, fourth pass).
+    /// an average of 1,066 units per body (#537).
     pub(crate) ast_units_in_functions: u64,
     /// Compile attempts, and what each bail was blamed on.
     pub(crate) compile_ok: u64,
@@ -66,7 +66,7 @@ pub(crate) struct PerfCounters {
     /// Where a `[[Call]]` came from, and what it reached.
     pub(crate) calls_from_vm: u64,
     pub(crate) calls_to_native: u64,
-    pub(crate) trivial_getter_hits: u64,
+    pub(crate) trivial_accessor_hits: u64,
     pub(crate) calls_to_user: u64,
     /// GC collections and their wall time (rare enough to time).
     pub(crate) gc_minor: u64,
@@ -132,7 +132,7 @@ impl Default for PerfCounters {
             compile_bail: FxHashMap::default(),
             calls_from_vm: 0,
             calls_to_native: 0,
-            trivial_getter_hits: 0,
+            trivial_accessor_hits: 0,
             calls_to_user: 0,
             gc_minor: 0,
             gc_major: 0,
@@ -272,8 +272,8 @@ impl PerfCounters {
         let _ = writeln!(out, "PERF\tcalls_to_native\t{}", self.calls_to_native);
         let _ = writeln!(
             out,
-            "PERF\ttrivial_getter_hits\t{}",
-            self.trivial_getter_hits
+            "PERF\ttrivial_accessor_hits\t{}",
+            self.trivial_accessor_hits
         );
         let _ = writeln!(out, "PERF\tcalls_to_user\t{}", self.calls_to_user);
         let _ = writeln!(out, "PERF\tgc_minor\t{}", self.gc_minor);

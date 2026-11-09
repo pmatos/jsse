@@ -244,6 +244,10 @@ pub(crate) struct Chunk {
     /// reads. A getter with this shape is served without a frame (see
     /// `Interpreter::call_getter`).
     pub(crate) trivial_private_getter: Option<u16>,
+    /// The body is exactly `return this.name;` or `this.name = param;`: the
+    /// `names` index of `name`. See `Interpreter::call_getter` and
+    /// `Interpreter::call_setter`.
+    pub(crate) trivial_accessor: Option<TrivialAccessor>,
     /// `--node` only (empty otherwise): the V8 error position, a source
     /// offset plus one, of each member op, as `(op offset, position)` by
     /// offset. Read when such an op finds a null or undefined base.
@@ -261,6 +265,14 @@ pub(crate) struct Chunk {
     pub(crate) iter_calls: Vec<u32>,
     /// One dispatch table per `SwitchTable` op (constant-selector `switch`).
     pub(crate) switch_tables: Vec<super::switch_table::SwitchTable>,
+}
+
+/// A function body that touches only `this.name`, see
+/// [`Chunk::detect_trivial_accessor`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TrivialAccessor {
+    Getter(u16),
+    Setter(u16),
 }
 
 impl Chunk {
@@ -315,6 +327,84 @@ impl Chunk {
             {
                 let idx = u16::from_le_bytes([*lo, *hi]);
                 (usize::from(idx) < self.private_names.len()).then_some(idx)
+            }
+            _ => None,
+        }
+    }
+
+    /// Records the frame-less accessor shapes of a function body compiled for
+    /// `shape`. A setter parameter counts only as the frame's one plain
+    /// parameter, with no `arguments` binding.
+    pub(crate) fn detect_trivial_shapes(&mut self, shape: &super::compiler::FrameShape<'_>) {
+        self.trivial_private_getter = self.detect_trivial_private_getter();
+        let param = match (
+            shape.simple_params,
+            shape.arguments_slot,
+            shape.separate_body_env,
+        ) {
+            ([param], false, false) => Some(param.as_str()),
+            _ => None,
+        };
+        self.trivial_accessor = self.detect_trivial_accessor(param);
+    }
+
+    /// Recognise the `return this.name;` and `this.name = param;` bodies, with
+    /// the same leading and trailing ops as `detect_trivial_private_getter`.
+    /// `param` is the setter's only parameter, if the frame has exactly one
+    /// plain parameter and nothing else.
+    fn detect_trivial_accessor(&self, param: Option<&str>) -> Option<TrivialAccessor> {
+        use super::op::Op;
+        if !self.ast.is_empty() || !self.handlers.is_empty() || self.needs_instantiation {
+            return None;
+        }
+        let mut code = self.code.as_slice();
+        if let [first, rest @ ..] = code
+            && *first == Op::Safepoint as u8
+        {
+            code = rest;
+        }
+        if let [first, _, _, _, _, rest @ ..] = code
+            && *first == Op::SetCallPos as u8
+        {
+            code = rest;
+        }
+        let name_index = |lo: u8, hi: u8| {
+            let idx = u16::from_le_bytes([lo, hi]);
+            (usize::from(idx) < self.names.len()).then_some(idx)
+        };
+        match code {
+            [load_this, get, lo, hi, ret, tail @ ..]
+                if *load_this == Op::LoadThis as u8
+                    && *get == Op::GetProp as u8
+                    && *ret == Op::Return as u8
+                    && (tail.is_empty() || tail == [Op::ReturnUndefined as u8]) =>
+            {
+                name_index(*lo, *hi).map(TrivialAccessor::Getter)
+            }
+            [
+                load_this,
+                load_local,
+                param_lo,
+                param_hi,
+                _,
+                _,
+                set,
+                lo,
+                hi,
+                pop,
+                ret,
+            ] if *load_this == Op::LoadThis as u8
+                && *load_local == Op::LoadLocal as u8
+                && *set == Op::SetProp as u8
+                && *pop == Op::Pop as u8
+                && *ret == Op::ReturnUndefined as u8 =>
+            {
+                let param = param?;
+                let loaded = name_index(*param_lo, *param_hi)?;
+                if self.names[usize::from(loaded)].as_str() != param {
+                    return None;
+                }
+                name_index(*lo, *hi).map(TrivialAccessor::Setter)
             }
             _ => None,
         }
