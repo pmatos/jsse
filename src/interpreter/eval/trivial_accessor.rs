@@ -5,26 +5,29 @@ use super::*;
 use crate::interpreter::bytecode::chunk::TrivialAccessor;
 use crate::interpreter::property::NamedGet;
 
+/// Not a Proxy, wrapped function or class constructor.
+fn is_plain_function(b: &JsObjectData) -> bool {
+    !(b.is_proxy() || b.is_proxy_revoked() || b.wrapped().is_some() || b.is_class_constructor())
+}
+
 impl Interpreter {
     /// [[Call]] of an accessor's getter with no arguments. A getter whose
-    /// whole body is `return this.#name;` reads the private element straight
-    /// off the receiver: it runs no user code of its own, so the frame,
-    /// environment and parameter binding a call would build are unobservable.
+    /// whole body is `return this.#name;` or `return this.name;` runs no user
+    /// code of its own, so the frame a call would build is unobservable.
     pub(crate) fn call_getter(&mut self, getter: &JsValue, receiver: &JsValue) -> Completion {
-        if self.bytecode_enabled {
-            if let Some(result) = self.call_trivial_private_getter(getter, receiver) {
-                return result;
-            }
-            if let Some(value) = self.call_trivial_named_getter(getter, receiver) {
-                return Completion::Normal(value);
-            }
+        if !self.bytecode_enabled {
+            return self.call_function(getter, receiver, &[]);
+        }
+        if let Some(result) = self.call_trivial_private_getter(getter, receiver) {
+            return result;
+        }
+        if let Some(value) = self.call_trivial_named_getter(getter, receiver) {
+            return Completion::Normal(value);
         }
         self.call_function(getter, receiver, &[])
     }
 
-    /// [[Call]] of an accessor's setter with the assigned value. A setter whose
-    /// whole body is `this.name = param;` stores into an ordinary receiver
-    /// directly, as `call_getter` does for `return this.name;`.
+    /// [[Call]] of an accessor's setter with the assigned value.
     pub(crate) fn call_setter(
         &mut self,
         setter: &JsValue,
@@ -37,10 +40,8 @@ impl Interpreter {
         self.call_function(setter, receiver, &[value])
     }
 
-    /// The chunk of an accessor function that may be served without a call:
-    /// a plain compiled function that is not a constructor, a Proxy or a
-    /// wrapped function, and whose body has a trivial shape. Callers also
-    /// require an object receiver, which a call would leave as `this`.
+    /// The chunk of an accessor function that may be served without a call.
+    /// Callers also require an object receiver, which a call leaves as `this`.
     fn trivial_accessor_chunk(&self, function: &JsValue) -> Option<(Rc<Chunk>, TrivialAccessor)> {
         let obj = self.get_object_cell(function.as_object_id()?)?;
         let b = obj.borrow();
@@ -56,15 +57,9 @@ impl Interpreter {
             return None;
         };
         let shape = chunk.trivial_accessor?;
-        if b.is_proxy() || b.is_proxy_revoked() || b.wrapped().is_some() || b.is_class_constructor()
-        {
-            return None;
-        }
-        Some((chunk.clone(), shape))
+        is_plain_function(&b).then(|| (chunk.clone(), shape))
     }
 
-    /// `return this.name;` on an object receiver whose lookup runs no user
-    /// code: the value, or `None` when the call has to run.
     fn call_trivial_named_getter(
         &mut self,
         getter: &JsValue,
@@ -77,18 +72,13 @@ impl Interpreter {
         let name = chunk.names.get(usize::from(idx))?;
         match self.named_get_fast(receiver, name.property_key(), chunk.prop_hint(idx)) {
             NamedGet::Value(value) => {
-                #[cfg(feature = "perf-counters")]
-                {
-                    self.perf.trivial_accessor_hits += 1;
-                }
+                self.count_trivial_hit();
                 Some(value)
             }
             NamedGet::Getter(_) | NamedGet::Slow => None,
         }
     }
 
-    /// `this.name = param;` stored in place on an ordinary receiver; `false`
-    /// leaves everything untouched and the call has to run.
     fn call_trivial_named_setter(
         &mut self,
         setter: &JsValue,
@@ -107,11 +97,18 @@ impl Interpreter {
         };
         let stored =
             self.named_store_fast(receiver, name.property_key(), value, chunk.prop_hint(idx));
-        #[cfg(feature = "perf-counters")]
         if stored {
-            self.perf.trivial_accessor_hits += 1;
+            self.count_trivial_hit();
         }
         stored
+    }
+
+    #[inline(always)]
+    fn count_trivial_hit(&mut self) {
+        #[cfg(feature = "perf-counters")]
+        {
+            self.perf.trivial_accessor_hits += 1;
+        }
     }
 
     fn call_trivial_private_getter(
@@ -136,20 +133,13 @@ impl Interpreter {
                 return None;
             };
             let idx = chunk.trivial_private_getter?;
-            if b.is_proxy()
-                || b.is_proxy_revoked()
-                || b.wrapped().is_some()
-                || b.is_class_constructor()
-            {
+            if !is_plain_function(&b) {
                 return None;
             }
             (chunk.clone(), idx, closure.clone(), b.function_realm())
         };
         let name = chunk.private_names.get(usize::from(idx))?;
-        #[cfg(feature = "perf-counters")]
-        {
-            self.perf.trivial_accessor_hits += 1;
-        }
+        self.count_trivial_hit();
         let id = self.resolve_private_name(name, &closure);
         Some(self.with_realm(function_realm, |interp| {
             interp.private_get_resolved(receiver, id, name)

@@ -244,9 +244,7 @@ pub(crate) struct Chunk {
     /// reads. A getter with this shape is served without a frame (see
     /// `Interpreter::call_getter`).
     pub(crate) trivial_private_getter: Option<u16>,
-    /// The body is exactly `return this.name;` or `this.name = param;`: the
-    /// `names` index of `name`. See `Interpreter::call_getter` and
-    /// `Interpreter::call_setter`.
+    /// The body is exactly `return this.name;` or `this.name = param;`.
     pub(crate) trivial_accessor: Option<TrivialAccessor>,
     /// `--node` only (empty otherwise): the V8 error position, a source
     /// offset plus one, of each member op, as `(op offset, position)` by
@@ -267,8 +265,8 @@ pub(crate) struct Chunk {
     pub(crate) switch_tables: Vec<super::switch_table::SwitchTable>,
 }
 
-/// A function body that touches only `this.name`, see
-/// [`Chunk::detect_trivial_accessor`].
+/// A function body that touches only `this.name`; the payload is the `names`
+/// index of `name`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TrivialAccessor {
     Getter(u16),
@@ -297,11 +295,9 @@ impl Chunk {
         Some(self.member_pos[at].1)
     }
 
-    /// Recognise the `return this.#name;` body: an optional `Safepoint`, then
-    /// `LoadThis`, `GetPrivate`, `Return`, with at most a trailing
-    /// `ReturnUndefined` after it. Nothing else may be present, so no
-    /// handler, hand-off or declaration needs a frame.
-    pub(crate) fn detect_trivial_private_getter(&self) -> Option<u16> {
+    /// The code of a body that needs no frame of its own, after the optional
+    /// leading `Safepoint` and (under `--node`, #1511) `SetCallPos`.
+    fn frameless_body(&self) -> Option<&[u8]> {
         use super::op::Op;
         if !self.ast.is_empty() || !self.handlers.is_empty() || self.needs_instantiation {
             return None;
@@ -312,24 +308,35 @@ impl Chunk {
         {
             code = rest;
         }
-        // `--node` leads the statement with its position (#1511).
         if let [first, _, _, _, _, rest @ ..] = code
             && *first == Op::SetCallPos as u8
         {
             code = rest;
         }
+        Some(code)
+    }
+
+    /// Recognise `LoadThis`, `<get_op> idx`, `Return`, with at most a trailing
+    /// `ReturnUndefined`: the index operand of that read.
+    fn this_read_index(code: &[u8], get_op: super::op::Op) -> Option<u16> {
+        use super::op::Op;
         match code {
             [load_this, get, lo, hi, ret, tail @ ..]
                 if *load_this == Op::LoadThis as u8
-                    && *get == Op::GetPrivate as u8
+                    && *get == get_op as u8
                     && *ret == Op::Return as u8
                     && (tail.is_empty() || tail == [Op::ReturnUndefined as u8]) =>
             {
-                let idx = u16::from_le_bytes([*lo, *hi]);
-                (usize::from(idx) < self.private_names.len()).then_some(idx)
+                Some(u16::from_le_bytes([*lo, *hi]))
             }
             _ => None,
         }
+    }
+
+    /// Recognise the `return this.#name;` body.
+    pub(crate) fn detect_trivial_private_getter(&self) -> Option<u16> {
+        let idx = Self::this_read_index(self.frameless_body()?, super::op::Op::GetPrivate)?;
+        (usize::from(idx) < self.private_names.len()).then_some(idx)
     }
 
     /// Records the frame-less accessor shapes of a function body compiled for
@@ -348,39 +355,17 @@ impl Chunk {
         self.trivial_accessor = self.detect_trivial_accessor(param);
     }
 
-    /// Recognise the `return this.name;` and `this.name = param;` bodies, with
-    /// the same leading and trailing ops as `detect_trivial_private_getter`.
+    /// Recognise the `return this.name;` and `this.name = param;` bodies.
     /// `param` is the setter's only parameter, if the frame has exactly one
     /// plain parameter and nothing else.
     fn detect_trivial_accessor(&self, param: Option<&str>) -> Option<TrivialAccessor> {
         use super::op::Op;
-        if !self.ast.is_empty() || !self.handlers.is_empty() || self.needs_instantiation {
-            return None;
+        let code = self.frameless_body()?;
+        let name_index = |idx: u16| (usize::from(idx) < self.names.len()).then_some(idx);
+        if let Some(idx) = Self::this_read_index(code, Op::GetProp) {
+            return name_index(idx).map(TrivialAccessor::Getter);
         }
-        let mut code = self.code.as_slice();
-        if let [first, rest @ ..] = code
-            && *first == Op::Safepoint as u8
-        {
-            code = rest;
-        }
-        if let [first, _, _, _, _, rest @ ..] = code
-            && *first == Op::SetCallPos as u8
-        {
-            code = rest;
-        }
-        let name_index = |lo: u8, hi: u8| {
-            let idx = u16::from_le_bytes([lo, hi]);
-            (usize::from(idx) < self.names.len()).then_some(idx)
-        };
         match code {
-            [load_this, get, lo, hi, ret, tail @ ..]
-                if *load_this == Op::LoadThis as u8
-                    && *get == Op::GetProp as u8
-                    && *ret == Op::Return as u8
-                    && (tail.is_empty() || tail == [Op::ReturnUndefined as u8]) =>
-            {
-                name_index(*lo, *hi).map(TrivialAccessor::Getter)
-            }
             [
                 load_this,
                 load_local,
@@ -399,12 +384,11 @@ impl Chunk {
                 && *pop == Op::Pop as u8
                 && *ret == Op::ReturnUndefined as u8 =>
             {
-                let param = param?;
-                let loaded = name_index(*param_lo, *param_hi)?;
-                if self.names[usize::from(loaded)].as_str() != param {
+                let loaded = name_index(u16::from_le_bytes([*param_lo, *param_hi]))?;
+                if self.names[usize::from(loaded)].as_str() != param? {
                     return None;
                 }
-                name_index(*lo, *hi).map(TrivialAccessor::Setter)
+                name_index(u16::from_le_bytes([*lo, *hi])).map(TrivialAccessor::Setter)
             }
             _ => None,
         }
