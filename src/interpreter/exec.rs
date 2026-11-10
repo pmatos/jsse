@@ -948,8 +948,7 @@ impl Interpreter {
                 let val = if let Some(e) = expr {
                     let can_tco = self.tco_on(env)
                         && self.generator_context.is_none()
-                        && !self.in_state_machine
-                        && self.tco_suppress_depth == 0
+                        && !self.tail_calls_suppressed()
                         && Self::expr_may_contain_tail_call(e);
                     if can_tco {
                         self.in_tail_position = true;
@@ -2239,10 +2238,8 @@ impl Interpreter {
             // A `return f()` in the body leaves the loop through IteratorClose, so
             // the call is not in tail position (HasCallInTailPosition has no
             // clause for iteration statements).
-            let saved_tco = self.tco_suppress_depth;
-            self.tco_suppress_depth = saved_tco + 1;
-            let body_result = self.exec_statement(&fo.body, &for_env);
-            self.tco_suppress_depth = saved_tco;
+            let body_result =
+                self.with_tco_suppressed(true, |interp| interp.exec_statement(&fo.body, &for_env));
             let body_result = self.dispose_resources(&for_env, body_result);
             match body_result {
                 Completion::Normal(val) => {
@@ -2329,13 +2326,10 @@ impl Interpreter {
 
     fn exec_try(&mut self, t: &TryStatement, env: &EnvRef) -> Completion {
         // Calls in the try Block are never in tail position: the handlers must
-        // stay live. Suppress TCO for its dynamic extent; `saved_tco` is the
-        // ambient level (non-zero inside an outer try/finally region).
-        let saved_tco = self.tco_suppress_depth;
+        // stay live. Suppress TCO for its dynamic extent.
         let block_env = Environment::new(Some(env.clone()));
-        self.tco_suppress_depth = saved_tco + 1;
-        let result = self.exec_statements(&t.block, &block_env);
-        self.tco_suppress_depth = saved_tco;
+        let result =
+            self.with_tco_suppressed(true, |interp| interp.exec_statements(&t.block, &block_env));
         // §14.2.2: DisposeResources for the try block's scope (using declarations)
         let result = self.dispose_resources(&block_env, result);
         let result = match result {
@@ -2353,7 +2347,7 @@ impl Interpreter {
             // and the exit propagates out via the `other` arm below.
             Completion::Throw(val) => {
                 if let Some(handler) = &t.handler {
-                    self.exec_catch_clause(handler, val, env, t.finalizer.is_some(), saved_tco)
+                    self.exec_catch_clause(handler, val, env, t.finalizer.is_some())
                 } else {
                     Completion::Throw(val)
                 }
@@ -2372,7 +2366,7 @@ impl Interpreter {
             }
             // A call in the finally Block IS in tail position (nothing runs
             // after it), so it must keep whatever ambient suppression applies
-            // but add none of its own — depth is already `saved_tco` here.
+            // but add none of its own.
             let fin_result = self.exec_finalizer(finalizer, &result, env);
             if fin_result.is_abrupt() {
                 return fin_result;

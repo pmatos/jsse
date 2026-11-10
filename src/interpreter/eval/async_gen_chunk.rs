@@ -300,12 +300,11 @@ impl Interpreter {
                 self.perf.enter_ast_body(name, key, false);
             }
         }
-        let saved_tco = self.tco_suppress_depth;
-        self.tco_suppress_depth = saved_tco + 1;
-        let result = self.with_ic_body_in_frame(&code.body, &code.frame, |interp| {
-            vm::run_generator_chunk(interp, &code.chunk, &code.func_env, &mut frame, resume)
+        let result = self.with_tco_suppressed(true, |interp| {
+            interp.with_ic_body_in_frame(&code.body, &code.frame, |interp| {
+                vm::run_generator_chunk(interp, &code.chunk, &code.func_env, &mut frame, resume)
+            })
         });
-        self.tco_suppress_depth = saved_tco;
         #[cfg(feature = "perf-counters")]
         if !code.chunk.ast.is_empty() {
             let exclusive = self.perf.leave_ast_body();

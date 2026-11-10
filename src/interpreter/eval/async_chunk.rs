@@ -208,9 +208,7 @@ impl Interpreter {
                 }
             }
             // Hand-offs cannot tail-call: this driver does not trampoline.
-            let saved_tco = interp.tco_suppress_depth;
-            interp.tco_suppress_depth = saved_tco + 1;
-            let result =
+            let result = interp.with_tco_suppressed(true, |interp| {
                 interp.with_ic_body_in_frame(&activation.body, &activation.frame_info, |interp| {
                     vm::run_generator_chunk(
                         interp,
@@ -219,8 +217,8 @@ impl Interpreter {
                         &mut activation.frame,
                         resume,
                     )
-                });
-            interp.tco_suppress_depth = saved_tco;
+                })
+            });
             let await_pos = interp.node_host.call_pos;
             #[cfg(feature = "perf-counters")]
             if !activation.chunk.ast.is_empty() {

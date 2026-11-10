@@ -10,7 +10,6 @@ impl Interpreter {
         val: JsValue,
         env: &EnvRef,
         has_finalizer: bool,
-        saved_tco: u32,
     ) -> Completion {
         let catch_env = Environment::new(Some(env.clone()));
         if let Some(param) = &handler.param {
@@ -22,11 +21,9 @@ impl Interpreter {
         let catch_block_env = Environment::new(Some(catch_env));
         // A call in the catch Block is in tail position only when there is no
         // finally; otherwise the finalizer must run.
-        if has_finalizer {
-            self.tco_suppress_depth = saved_tco + 1;
-        }
-        let r = self.exec_statements(&handler.body, &catch_block_env);
-        self.tco_suppress_depth = saved_tco;
+        let r = self.with_tco_suppressed(has_finalizer, |interp| {
+            interp.exec_statements(&handler.body, &catch_block_env)
+        });
         self.dispose_resources(&catch_block_env, r)
     }
 

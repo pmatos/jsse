@@ -102,8 +102,19 @@ _Avoid_: parser checkpoint, pushback token, parser transaction.
 ## Control flow
 
 **Completion Propagation**:
-The unwrap-or-early-return of the interpreter's `Completion` type behind the `propagate!(expr)` macro and its `IntoAbrupt` trait (`src/interpreter/types.rs`): the success value (`Completion::Normal`, or a `Result` `Ok`) is bound, and any abrupt completion early-returns out of the enclosing `-> Completion` function. `IntoAbrupt` adapts the three propagation source shapes into one spelling — a `Completion`, a `Result<T, JsValue>` (a Rust `Err` is a JS throw, wrapped in `Completion::Throw`), and a `Result<T, Completion>` (passed through) — replacing the hand-rolled two-line `match` heads scattered across the natives. `Completion::Empty` is not abrupt but is still propagated verbatim, matching the sites it replaces. A new source shape is one added `IntoAbrupt` impl, with no call-site churn.
+`propagate!(expr)` and `IntoAbrupt` (`types.rs`) unwrap `Completion::Normal`
+or `Result::Ok`; every other Completion, including Empty, returns unchanged.
+`Result<T, JsValue>` errors become Throw; `Result<T, Completion>` errors pass
+through. A new source shape needs one trait implementation, without caller edits.
 _Avoid_: try macro, error unwrap, ReturnIfAbrupt helper.
+
+**TCO Suppression Scope**:
+`with_tco_suppressed` (`tail_call_scope.rs`) adds conditional synchronous
+suppression; false preserves the ambient state. `with_tco_reset` starts a user
+activation without inherited depth or state-machine suppression. Both restore the caller on every
+returned result. Suspension ends the scope; each resume enters anew. Finalizers,
+disposal and completion routing retain their caller-owned extents.
+_Avoid_: saved TCO depth, manual suppression pairing.
 
 **Scope Frame**:
 A `Block`, or a `try`/`catch`/`finally` clause's own statement list, that directly declares `await using` in a plain async function, lowered through `EnterScope`/`ExitScope` `StateTerminator`s (`generator_transform.rs`'s `transform_scope_block`/`transform_clause_body`) instead of being flattened. `EnterScope` creates the scope's own `Environment` and pushes a `ScopeFrame { env, try_depth, for_of_depth }` onto `AsyncFunctionState::scope_stack`; every subsequent state body in that scope runs against it (`async_function_resume`'s `term_env`, picking whichever of the innermost scope frame or the innermost `for_of_stack` entry was opened more recently). `ExitScope` pops the frame and disposes its `dispose_stack` suspendably at each DisposeResources `Await`, exactly like the function-level disposal and `for_of_stack`'s own disposals already do. `route_return!`/`route_loop_control!`/the throw-routing block dispose any frames a `return`/`break`/`continue`/throw crosses (`unwind_scopes_to!`) before continuing to route it. Because `scope_stack` is a stack, nested scopes and a scope directly in a try/catch/finally list need no separate mechanism. Gated to plain async functions (`ctx.detect_for_await`) — see ADR-2026-09-21-1007.

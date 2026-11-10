@@ -1939,12 +1939,10 @@ fn run_chunk_inner<const GENERATOR: bool>(
                     }
                     // Inside a `try` block the statement's calls are never in
                     // tail position: the handler must stay on the stack.
-                    let saved_tco = interp.tco_suppress_depth;
-                    if flags & EXEC_NO_TAIL_CALL != 0 {
-                        interp.tco_suppress_depth = saved_tco + 1;
-                    }
-                    let completion = interp.exec_statement(stmt, cur_env!());
-                    interp.tco_suppress_depth = saved_tco;
+                    let completion = interp
+                        .with_tco_suppressed(flags & EXEC_NO_TAIL_CALL != 0, |interp| {
+                            interp.exec_statement(stmt, cur_env!())
+                        });
                     let set_completion = flags & EXEC_SET_COMPLETION != 0;
                     match completion {
                         Completion::Normal(value) => {
