@@ -51,9 +51,7 @@ impl Interpreter {
         };
         self.call_stack_envs.push(exec_env.clone());
         self.in_tail_position = false;
-        let saved_tco_suppress = std::mem::take(&mut self.tco_suppress_depth);
-        let result = run(self);
-        self.tco_suppress_depth = saved_tco_suppress;
+        let result = self.with_tco_reset(run);
         if noted {
             self.node_host.stack.arrow_receivers.pop();
         }

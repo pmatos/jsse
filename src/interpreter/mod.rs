@@ -19,6 +19,7 @@ pub(crate) struct AgentBroadcastMsg {
 mod dollar_262;
 mod module_error_cache;
 mod property_descriptor;
+mod tail_call_scope;
 mod types;
 mod weak_slots;
 pub(crate) use types::*;
@@ -519,11 +520,7 @@ pub(crate) struct Interpreter {
     /// band without immediately re-tripping. Re-armed only once the stack has
     /// unwound below `CALL_DEPTH_REARM_LIMIT`.
     pub(crate) overflow_armed: bool,
-    /// Nesting count of try/finally regions where a call is NOT in tail
-    /// position (the try Block, a catch Block guarded by a finally, and the
-    /// finally Block). Non-zero suppresses proper-tail-call optimization so the
-    /// exception/finalizer handlers stay live. Saved and reset to 0 on entry to
-    /// each function body so it never leaks into callees.
+    /// Ambient TCO suppression, managed by `tail_call_scope`.
     pub(crate) tco_suppress_depth: u32,
     /// Current expression-evaluation nesting depth. Incremented on entry to
     /// every `eval_expr` and decremented (via `EvalDepthGuard`) as it unwinds.
