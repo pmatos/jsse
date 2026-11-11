@@ -1,4 +1,5 @@
 use super::super::*;
+use super::array_join::{self, JoinMethod};
 use super::array_search::{self, Search};
 use super::array_transform::{self, Transform};
 use super::find_via_predicate::FindMethod;
@@ -1954,34 +1955,7 @@ impl Interpreter {
             "join".to_string(),
             1,
             |interp, this_val, args| {
-                let ta = match validate_typed_array(interp, this_val) {
-                    Ok(ta) => ta,
-                    Err(c) => return c,
-                };
-                let len = typed_array_length(&ta);
-                let sep = if args.is_empty() || args[0].is_undefined() {
-                    JsString::from_str(",")
-                } else {
-                    match interp.to_js_string(&args[0]) {
-                        Ok(s) => s,
-                        Err(e) => return Completion::Throw(e),
-                    }
-                };
-                let mut units: Vec<u16> = Vec::new();
-                for i in 0..len {
-                    if i > 0
-                        && let Err(e) = interp.append_code_units(&mut units, sep.as_units())
-                    {
-                        return Completion::Throw(e);
-                    }
-                    let elem = typed_array_get_index(&ta, i);
-                    if !elem.is_nullish()
-                        && let Err(e) = interp.append_js_string(&mut units, &elem)
-                    {
-                        return Completion::Throw(e);
-                    }
-                }
-                Completion::Normal(JsValue::string(JsString::from_vec(units)))
+                array_join::join(interp, JoinMethod::TypedArrayJoin, this_val, args)
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -2002,38 +1976,7 @@ impl Interpreter {
             "toLocaleString".to_string(),
             0,
             |interp, this_val, args| {
-                // ValidateTypedArray: Type(O) must be Object
-                if !this_val.is_object() {
-                    return Completion::Throw(interp.create_type_error("not a TypedArray"));
-                }
-                let ta = match validate_typed_array(interp, this_val) {
-                    Ok(ta) => ta,
-                    Err(c) => return c,
-                };
-                let locales = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-                let pass_args = [locales, options];
-                let len = typed_array_length(&ta);
-                let mut result: Vec<u16> = Vec::new();
-                for k in 0..len {
-                    if k > 0
-                        && let Err(e) = interp.append_code_units(&mut result, &[u16::from(b',')])
-                    {
-                        return Completion::Throw(e);
-                    }
-                    let next_element = typed_array_get_index(&ta, k);
-                    if !next_element.is_nullish()
-                        && let Err(c) = super::array::append_locale_string(
-                            interp,
-                            &mut result,
-                            &next_element,
-                            &pass_args,
-                        )
-                    {
-                        return c;
-                    }
-                }
-                Completion::Normal(JsValue::string(JsString::from_vec(result)))
+                array_join::join(interp, JoinMethod::TypedArrayLocaleString, this_val, args)
             },
         ));
         self.get_object_cell_expect(proto_id)
