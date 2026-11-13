@@ -1,5 +1,6 @@
 use super::super::*;
 use super::array_dense;
+use super::array_join::{self, JoinMethod};
 use super::array_search::{self, Search};
 use super::array_transform::{self, Transform};
 use super::find_via_predicate::FindMethod;
@@ -152,40 +153,6 @@ pub(super) fn create_data_property_at(
         return Ok(());
     }
     create_data_property_or_throw(interp, a, &idx.to_string(), value)
-}
-
-// Steps 6.c.i-ii of Array.prototype.toLocaleString, shared with
-// %TypedArray%.prototype.toLocaleString: appends
-// ? ToString(? Invoke(element, "toLocaleString", args)) to `out`.
-pub(super) fn append_locale_string(
-    interp: &mut Interpreter,
-    out: &mut Vec<u16>,
-    element: &JsValue,
-    args: &[JsValue],
-) -> Result<(), Completion> {
-    let element_obj = match interp.to_object(element) {
-        Completion::Normal(v) => v,
-        other => return Err(other),
-    };
-    let obj_id = element_obj
-        .as_object_id()
-        .expect("ToObject must return an object");
-    let method = match interp.get_object_property(obj_id, "toLocaleString", element) {
-        Completion::Normal(v) => v,
-        other => return Err(other),
-    };
-    if !interp.is_callable(&method) {
-        return Err(Completion::Throw(
-            interp.create_type_error("toLocaleString is not a function"),
-        ));
-    }
-    let value = match interp.call_function(&method, element, args) {
-        Completion::Normal(v) => v,
-        other => return Err(other),
-    };
-    interp
-        .append_js_string(out, &value)
-        .map_err(Completion::Throw)
 }
 
 // Set(O, P, V, true) — invoke setters on prototype, check writable, throw on failure
@@ -1335,54 +1302,7 @@ impl Interpreter {
 
         // Array.prototype.join
         self.define_method(proto_id, "join", 1, |interp, this_val, args| {
-            let o = match to_object_val(interp, this_val) {
-                Ok(v) => v,
-                Err(c) => return c,
-            };
-            let len = match length_of_array_like(interp, &o) {
-                Ok(v) => v,
-                Err(c) => return c,
-            };
-            let sep = match args.first() {
-                Some(s) if !s.is_undefined() => match interp.to_js_string(s) {
-                    Ok(s) => s,
-                    Err(e) => return Completion::Throw(e),
-                },
-                _ => JsString::from_str(","),
-            };
-
-            let receiver_id = o.as_object_id().expect("ToObject must return an object");
-            if interp.active_array_joins.contains(&receiver_id) {
-                return Completion::Normal(JsValue::string(JsString::from_str("")));
-            }
-
-            interp.active_array_joins.push(receiver_id);
-            let result = (|| {
-                let mut units: Vec<u16> = Vec::new();
-                for i in 0..len {
-                    if i > 0
-                        && let Err(e) = interp.append_code_units(&mut units, sep.as_units())
-                    {
-                        return Completion::Throw(e);
-                    }
-                    let elem = match interp.numeric_index_fast_get(&o, i as f64) {
-                        Some(v) => v,
-                        None => match obj_get(interp, &o, &i.to_string()) {
-                            Ok(v) => v,
-                            Err(c) => return c,
-                        },
-                    };
-                    if !elem.is_nullish()
-                        && let Err(e) = interp.append_js_string(&mut units, &elem)
-                    {
-                        return Completion::Throw(e);
-                    }
-                }
-                Completion::Normal(JsValue::string(JsString::from_vec(units)))
-            })();
-            let popped_receiver = interp.active_array_joins.pop();
-            debug_assert_eq!(popped_receiver, Some(receiver_id));
-            result
+            array_join::join(interp, JoinMethod::ArrayJoin, this_val, args)
         });
 
         // Array.prototype.toString
@@ -1408,36 +1328,7 @@ impl Interpreter {
 
         // Array.prototype.toLocaleString
         self.define_method(proto_id, "toLocaleString", 0, |interp, this_val, args| {
-            let o = match to_object_val(interp, this_val) {
-                Ok(v) => v,
-                Err(c) => return c,
-            };
-            let len = match length_of_array_like(interp, &o) {
-                Ok(v) => v,
-                Err(c) => return c,
-            };
-            let locales = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-            let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-            let pass_args = [locales, options];
-            let mut result: Vec<u16> = Vec::new();
-            for k in 0..len {
-                if k > 0
-                    && let Err(e) = interp.append_code_units(&mut result, &[u16::from(b',')])
-                {
-                    return Completion::Throw(e);
-                }
-                let next_element = match obj_get(interp, &o, &k.to_string()) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                if !next_element.is_nullish()
-                    && let Err(c) =
-                        append_locale_string(interp, &mut result, &next_element, &pass_args)
-                {
-                    return c;
-                }
-            }
-            Completion::Normal(JsValue::string(JsString::from_vec(result)))
+            array_join::join(interp, JoinMethod::ArrayLocaleString, this_val, args)
         });
 
         // Array.prototype.concat

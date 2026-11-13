@@ -199,7 +199,16 @@ _Avoid_: generator cleanup, completing the generator, generator disposal (that i
 **Loop Control**:
 A `break`/`continue` the transform lowers to `StateTerminator::LoopControl(LoopControlTarget)` instead of a bare `Goto`. The target records where the jump lands (`target_state`) and how many `try` contexts (`try_depth`), `for-of` loops (`for_of_depth`) and block scopes (`scope_depth`) remain active there, so routing never depends on state-id equality. The driver routes it through the innermost un-entered `finally` between the jump and its target, closing the `for-of` iterators it crosses first, and resumes the jump when that finalizer's `TryExit` runs (`route_loop_control!` for async functions, `route_generator_loop_control` for sync and async generators).
 
-**Completion Ownership**: All three drivers (sync generators, async generators, plain async functions) park a throw, return, or loop-control jump a running `finally` is handling on that finalizer's own `TryContextInfo.pending_completion: Option<PendingCompletion>` (`PendingCompletion::Throw`/`Return`/`LoopControl`) — never on a driver-global slot. Ownership on the context, not the driver, is what makes a nested `try`/`finally` entered inside that finally's own body (or a suspension in between) structurally unable to see or consume it: `TryExit` reads only the context it just popped. A completion escaping a running finalizer (a new throw, a new return, or a jump leaving it) replaces the earlier one by dropping that finalizer's context — truncating `try_stack` to the routed depth, unconditionally, is what makes the replacement structural rather than a separate clear of driver-global state. One kind of state remains legitimately off the context: a fresh, not-yet-routed resume input — an external `.throw()`/`.return()` injection (`IteratorState::pending_exception`/`pending_return`) or an in-flight exception a `Throw` operand just produced — which is consumed into a `pending_completion` at the point it is actually intercepted, not before. See ADR-2026-10-01-0011.
+**Completion Ownership**:
+All three drivers park an intercepted throw, return or loop-control jump on the
+running finalizer's `TryContextInfo.pending_completion: Option<PendingCompletion>`
+(`Throw`/`Return`/`LoopControl`). `TryExit` consumes only its own popped context,
+so a nested finalizer or suspension cannot consume its parent's completion.
+An escaping completion replaces the pending one by unconditionally truncating
+`try_stack` to the routed depth, dropping the old finalizer's context. Fresh,
+unrouted resume inputs (`IteratorState::pending_exception`/`pending_return` from
+external `.throw()`/`.return()`, or a Throw operand's exception) remain outside
+contexts until interception. ADR-2026-10-01-0011 retains independent driver routing.
 _Avoid_: pending_loop_control (renamed to pending_completion), driver-global completion, goto, jump state.
 
 **Try Context Pairing**:
@@ -291,6 +300,14 @@ callers choose a scalar or snapshot. `validate_typed_array` adds detached/OOB
 rejection; `ta_number_getter` instead returns zero for detached/OOB views.
 Borrows end before `create_type_error` mutates the arena.
 _Avoid_: receiver check, brand check (for the whole prologue), this-unwrap.
+
+**JoinIndexedProperties**:
+`join`/`JoinMethod` (`builtins/array_join.rs`) own Array/TypedArray join and
+locale joining: preparation, captured range, live reads, conversion, checked
+UTF-16 output and roots. Array reads holes; TypedArray validates first. Only
+Array join owns cyclic-receiver tracking, entered after separator conversion.
+Locale joining invokes each non-nullish element with two arguments.
+_Avoid_: string join cursor, formatter protocol.
 
 **Value Search**:
 `search`/`Search` (`builtins/array_search.rs`) own Array/TypedArray
