@@ -1,3 +1,11 @@
+## [0.14.1](https://github.com/pmatos/jsse/compare/v0.14.0...v0.14.1) (2026-11-15)
+
+
+### Performance Improvements
+
+* **interpreter:** skip the for-let iteration copy when closures ignore head bindings ([#1593](https://github.com/pmatos/jsse/issues/1593)) ([7abf48a](https://github.com/pmatos/jsse/commit/7abf48a1694732afa05b78c591398a7ce6b9a526))
+* **property:** call setters directly and skip the frame for trivial accessors ([#1595](https://github.com/pmatos/jsse/issues/1595)) ([5db2996](https://github.com/pmatos/jsse/commit/5db2996f17eadb131b1c12145a526b8b2f5164fd))
+
 # [0.14.0](https://github.com/pmatos/jsse/compare/v0.13.0...v0.14.0) (2026-11-08)
 
 
