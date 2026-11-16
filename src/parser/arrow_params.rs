@@ -103,10 +103,7 @@ impl<'a> Parser<'a> {
                 adopt_positions(param, refined);
             }
         }
-        if self.strict {
-            self.check_strict_params(&params)?;
-        }
-        self.check_duplicate_params_strict(&params)?;
+        self.check_arrow_head_parameters(&params)?;
         Ok(params)
     }
 

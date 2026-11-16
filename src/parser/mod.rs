@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 pub(crate) use cover_patterns::{check_object_rest_target, expr_to_pattern, pattern_to_expr};
+use parameter_early_errors::ParameterGrammar;
 pub(crate) use parse_error::ParseError;
 
 mod arrow_params;
@@ -21,6 +22,7 @@ mod module_early_errors;
 mod module_start;
 mod modules;
 mod node_hooks;
+mod parameter_early_errors;
 mod parse_error;
 mod positions;
 mod prologue;
@@ -630,24 +632,6 @@ impl<'a> Parser<'a> {
         self.identifier_name(&self.current).map(str::to_owned)
     }
 
-    fn is_simple_parameter_list(params: &[Pattern]) -> bool {
-        params.iter().all(|p| matches!(p, Pattern::Identifier(_)))
-    }
-
-    fn check_duplicate_params_strict(&self, params: &[Pattern]) -> Result<(), ParseError> {
-        let mut seen = HashSet::new();
-        let mut names = Vec::new();
-        for p in params {
-            p.bound_names(&mut names);
-        }
-        for name in &names {
-            if !seen.insert(name.as_str()) {
-                return Err(self.error("Duplicate parameter name not allowed in this context"));
-            }
-        }
-        Ok(())
-    }
-
     fn is_strict_reserved_word(name: &str) -> bool {
         matches!(
             name,
@@ -666,37 +650,6 @@ impl<'a> Parser<'a> {
     fn check_strict_identifier(&self, name: &str) -> Result<(), ParseError> {
         if self.strict && Self::is_strict_reserved_word(name) {
             return Err(self.error(format!("Unexpected strict mode reserved word '{name}'")));
-        }
-        Ok(())
-    }
-
-    fn check_strict_function_name(&self, name: &str) -> Result<(), ParseError> {
-        if name == "eval" || name == "arguments" {
-            return Err(self.error(format!(
-                "'{name}' is not allowed as a function name in strict mode"
-            )));
-        }
-        if Self::is_strict_reserved_word(name) {
-            return Err(self.error(format!("Unexpected strict mode reserved word '{name}'")));
-        }
-        Ok(())
-    }
-
-    fn check_strict_params(&self, params: &[Pattern]) -> Result<(), ParseError> {
-        let mut names = Vec::new();
-        for p in params {
-            p.bound_names(&mut names);
-        }
-        for name in &names {
-            if name == "eval" || name == "arguments" {
-                return Err(self.error(format!(
-                    "'{}' can't be used as a parameter name in strict mode",
-                    name
-                )));
-            }
-            if Self::is_strict_reserved_word(name) {
-                return Err(self.error(format!("Unexpected strict mode reserved word '{name}'")));
-            }
         }
         Ok(())
     }

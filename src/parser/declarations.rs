@@ -78,23 +78,15 @@ impl<'a> Parser<'a> {
         let (body, body_strict) =
             self.parse_function_body_inner(is_generator, is_async, false, false)?;
         self.in_non_arrow_function -= 1;
-        if body_strict && !Self::is_simple_parameter_list(&params) {
-            return Err(self.error(
-                "Illegal 'use strict' directive in function with non-simple parameter list",
-            ));
-        }
-        if body_strict {
-            self.check_strict_function_name(&name)?;
-            self.check_strict_params(&params)?;
-        }
-        if body_strict
-            || self.strict
-            || is_async
-            || is_generator
-            || !Self::is_simple_parameter_list(&params)
-        {
-            self.check_duplicate_params_strict(&params)?;
-        }
+        self.check_body_parameters(
+            &params,
+            ParameterGrammar::Function {
+                name: Some(&name),
+                is_async,
+                is_generator,
+            },
+            body_strict,
+        )?;
         let source_text = self.source_since(source_start);
         Ok(Statement::FunctionDeclaration(Box::new(FunctionDecl {
             name,
@@ -904,22 +896,7 @@ impl<'a> Parser<'a> {
         let (body, body_strict) =
             self.parse_function_body_inner(is_generator, is_async, true, is_constructor)?;
         self.in_non_arrow_function -= 1;
-        if body_strict && !Self::is_simple_parameter_list(&params) {
-            return Err(self.error(
-                "Illegal 'use strict' directive in function with non-simple parameter list",
-            ));
-        }
-        if body_strict {
-            self.check_strict_params(&params)?;
-        }
-        if body_strict
-            || self.strict
-            || is_async
-            || is_generator
-            || !Self::is_simple_parameter_list(&params)
-        {
-            self.check_duplicate_params_strict(&params)?;
-        }
+        self.check_body_parameters(&params, ParameterGrammar::Method, body_strict)?;
         let source_text = self.source_since(method_source_start);
         Ok(FunctionExpr {
             name: None,
@@ -1113,11 +1090,7 @@ impl<'a> Parser<'a> {
         self.set_function_param_names(params);
         let (stmts, body_strict) = self.parse_arrow_function_body(is_async)?;
         self.function_param_names = outer_param_names;
-        if body_strict && !Self::is_simple_parameter_list(params) {
-            return Err(self.error(
-                "Illegal 'use strict' directive in function with non-simple parameter list",
-            ));
-        }
+        self.check_body_parameters(params, ParameterGrammar::Arrow, body_strict)?;
         Ok((stmts, body_strict))
     }
 }
