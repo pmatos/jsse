@@ -96,8 +96,15 @@ _Avoid_: native generator, VM generator.
 ## Parsing
 
 **Lookahead Cursor**:
-A read-only fork of the parser's token stream used to classify ambiguous grammar prefixes. `Parser::lookahead` exposes only the current token, the line-terminator boundary before it, and forward advancement on a cloned `Lexer`; the live parser's token, source spans, and lexer position never change during a probe. Once a branch is selected, the parser consumes that branch normally.
+`Parser::lookahead` reads tokens and line boundaries on a cloned Lexer without
+changing live input. The grammar then consumes normally.
 _Avoid_: parser checkpoint, pushback token, parser transaction.
+
+**Parameter Early Errors**:
+`parameter_early_errors.rs` owns grammar-specific strict-name, duplicate and
+Use Strict Directive checks. Arrow head checks precede body parsing; body
+checks follow it.
+_Avoid_: validation plan, parameter finalizer.
 
 ## Control flow
 
