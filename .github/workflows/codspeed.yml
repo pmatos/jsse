@@ -47,7 +47,7 @@ jobs:
         run: cargo codspeed build -m simulation
 
       - name: Run the benchmarks
-        uses: CodSpeedHQ/action@61efe07e57e55bedeab750c434504de272a56e8c # v5.6.1
+        uses: CodSpeedHQ/action@b1f28b5eccf7cb5bfe6a2a89cb3053eb67f1150c # v5.8.0
         with:
           mode: simulation
           run: cargo codspeed run
