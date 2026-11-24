@@ -1,0 +1,12 @@
+const a = [5, 1, 10, 2, 100, 3];
+show(a.slice().sort(), a.slice().sort((x, y) => x - y), a.toSorted((x, y) => y - x), a);
+show([1, [2, [3, [4]]]].flat(), [1, [2, [3, [4]]]].flat(Infinity), [1, 2, 3].flatMap((x) => [x, x * 2]));
+show([1, 2, 3].reduce((s, x) => s + x), [1, 2, 3].reduceRight((s, x) => s + x, ""), [].concat(1, [2], [[3]]));
+show(Array.from({ length: 3 }, (_, i) => i * i), Array.of(7), new Array(3), [, 1, , 2].length);
+show([3, 1, 2].findLast((x) => x > 1), [3, 1, 2].findLastIndex((x) => x > 5), [1, 2, 3].with(1, 9), [1, 2, 3].toSpliced(0, 1));
+const sparse = [1, , 3];
+show(sparse.map((x) => x * 2), Object.keys(sparse), sparse.indexOf(undefined), sparse.includes(undefined));
+show([1, 2, 3].join(), [null, undefined, 1].join("-"), [[1, 2], [3]].toString(), String([]));
+const stable = [{ k: 1, v: "a" }, { k: 0, v: "b" }, { k: 1, v: "c" }, { k: 0, v: "d" }];
+show(stable.sort((x, y) => x.k - y.k).map((o) => o.v).join(""));
+show([1, 2, 3, 4, 5].copyWithin(0, 3), [0, 0, 0].fill(7, 1), [1, 2, 3].entries().next().value);

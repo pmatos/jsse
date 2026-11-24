@@ -108,12 +108,12 @@ local hook was bypassed.
   pushes for everyone except the release deploy key used by `release.yml`.
 
 ## Testing
-- Primary validation: test262 suite
+- Primary validation: test262. Pre-PR: [verify](.claude/skills/verify/SKILL.md)
 - Custom tests: `tests/` directory
 - After any implementation work, run the full test262 suite.
 - Run test262: `uv run python scripts/run-test262.py`
 - Run linter: `./scripts/lint.sh`
-- Python scripts are run via `uv run python` (no virtualenv setup needed).
+- Python scripts run via `uv run python` (no venv).
 - Ensure forward progress.
   - We should implement new features to ensure new tests pass without regressing on previously passing tests.
 - Each test runs under a time limit (default 120s) and a memory limit (512 MB) to prevent runaway tests from crashing the system. These limits are enforced in `scripts/run-test262.py`.

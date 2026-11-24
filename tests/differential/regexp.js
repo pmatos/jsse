@@ -1,0 +1,12 @@
+const re = /(?<year>\d{4})-(?<month>\d{2})/g;
+const text = "2024-01 and 2025-12";
+show([...text.matchAll(re)].map((m) => [m.index, m.groups.year, m.groups.month]));
+show(text.replace(re, "$<month>/$<year>"), re.lastIndex, re.flags, re.source);
+show(/a.c/s.test("a\nc"), /^b/m.test("a\nb"), /\u{1F600}/u.test("😀"), /[^]/.test("\n"));
+show("aBc".match(/b/i), "abc".match(/z/), "a1b2c3".split(/\d/), "x".search(/y/));
+show(/(a)|(b)/.exec("b"), /(?=a)a/.exec("a").index, /(?<!\$)\d+/.exec("$1 2")[0]);
+const sticky = /foo/y;
+sticky.lastIndex = 3;
+show(sticky.test("barfoo"), sticky.lastIndex, String(/a\/b/), new RegExp("a/b").source);
+show("aaa".replace(/a*?/g, "-"), "abc".replace(/(?:)/g, "."), /[\p{L}]+/u.exec("héllo wörld")[0]);
+show(/\bfoo\b/.test("a foo b"), /(\w)\1/.exec("abccd")[0], RegExp.prototype.toString.call(/x/dgimsuy));
