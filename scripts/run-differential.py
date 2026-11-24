@@ -48,7 +48,9 @@ NODE_RUNNER = REPO_ROOT / "scripts" / "differential-node-runner.js"
 AS_LIMITS = {"jsse": 512 << 20, "node": 4 << 30, "boa": 4 << 30}
 # jsse exits 101 when the interpreter panics (Rust's default panic exit code).
 JSSE_PANIC_EXIT = 101
-ERROR_CLASS_RE = re.compile(r"^\s*(?:Uncaught:?\s+)?([A-Za-z0-9]*Error)\b:?")
+ERROR_CLASS_RE = re.compile(r"^\s*([A-Za-z0-9]*Error)\b:?")
+BOA_REPORT_RE = re.compile(r"^\s*\d+:\s+([A-Za-z0-9]*Error):", re.MULTILINE)
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 @dataclass(frozen=True)
@@ -96,15 +98,25 @@ def classify(engine: str, code: int | None, stdout: str, stderr: str) -> Result:
         return Result("crash", out)
     if code == 0:
         return Result("ok", out)
-    # Boa reports an uncaught error on stdout; move it into the outcome so the
-    # stdout comparison stays about what the program printed.
     if engine == "boa":
-        lines = out.split("\n")
-        if lines and lines[-1].startswith("Uncaught"):
-            cls = extract_error_class(lines[-1])
-            return Result(f"throw:{cls or '?'}", "\n".join(lines[:-1]))
+        return classify_boa_error(out, stderr)
     cls = extract_error_class(stderr)
     return Result(f"throw:{cls or '?'}", out)
+
+
+def classify_boa_error(out: str, stderr: str) -> Result:
+    """Boa prints an uncaught exception to stdout as `Uncaught Error: <value>`
+    plus `    at` frames, and a parse error to stderr as an eyre report
+    (`   0: SyntaxError: ...`, ANSI-coloured). Move the uncaught report out of
+    stdout so the comparison stays about what the program printed."""
+    lines = out.split("\n")
+    for i in range(len(lines) - 1, -1, -1):
+        if lines[i].startswith("Uncaught "):
+            value = lines[i].removeprefix("Uncaught ").removeprefix("Error: ")
+            cls = extract_error_class(value)
+            return Result(f"throw:{cls or '?'}", "\n".join(lines[:i]))
+    m = BOA_REPORT_RE.search(ANSI_RE.sub("", stderr))
+    return Result(f"throw:{m.group(1) if m else '?'}", out)
 
 
 def _preexec(limit: int):
@@ -124,7 +136,11 @@ def with_prelude(path: Path, scratch: Path) -> Path:
     """Every engine runs the same bytes: the `show` prelude, then the file."""
     combined = scratch / path.name
     combined.write_text(
-        PRELUDE.read_text(encoding="utf-8") + "\n" + path.read_text(encoding="utf-8"),
+        PRELUDE.read_text(encoding="utf-8")
+        + "\n"
+        + path.read_text(encoding="utf-8")
+        # Boa's CLI prints the script's completion value; make it undefined.
+        + "\nvoid 0;\n",
         encoding="utf-8",
     )
     return combined

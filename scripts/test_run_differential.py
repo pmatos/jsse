@@ -48,9 +48,18 @@ class ClassifyTests(unittest.TestCase):
     def test_timeout(self):
         self.assertEqual(rd.classify("jsse", None, "partial\n", "").outcome, "timeout")
 
-    def test_boa_uncaught_line_moves_from_stdout_to_outcome(self):
-        result = rd.classify("boa", 1, "printed\nUncaught: RangeError: bad\n", "")
-        self.assertEqual(result, Result("throw:RangeError", "printed"))
+    def test_boa_uncaught_report_moves_from_stdout_to_outcome(self):
+        out = "printed\nUncaught Error: RangeError: bad (t.js:1:7)\n    at <main> (t.js:1:7)\n"
+        self.assertEqual(
+            rd.classify("boa", 1, out, ""), Result("throw:RangeError", "printed")
+        )
+        self.assertEqual(
+            rd.classify("boa", 1, "Uncaught Error: 1\n", "").outcome, "throw:?"
+        )
+
+    def test_boa_parse_error_comes_from_the_stderr_report(self):
+        stderr = "Error: \n   0: \x1b[91mSyntaxError: 'let' is disallowed\x1b[0m\n"
+        self.assertEqual(rd.classify("boa", 1, "", stderr).outcome, "throw:SyntaxError")
 
 
 class JudgeTests(unittest.TestCase):
