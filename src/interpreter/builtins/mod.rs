@@ -115,6 +115,7 @@ mod node_host_zlib;
 mod node_host_zlib_ctx;
 mod node_prelude;
 mod number;
+mod number_fixed;
 mod object;
 pub(crate) mod plural_rules_state;
 mod predicate_quantification;
