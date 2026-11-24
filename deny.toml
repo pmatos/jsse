@@ -14,7 +14,13 @@ all-features = true
 version = 2
 # Add RUSTSEC IDs here with a justification only when an advisory is triaged as
 # not applicable; keep the list empty so new advisories fail loudly by default.
-ignore = []
+ignore = [
+  # chrono / chrono-tz are flagged unmaintained (no vulnerability, no safe
+  # upgrade). They back host time-zone lookups for Date and Intl; moving to jiff
+  # (already a dependency) is tracked separately. Drop these once it lands.
+  { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained; migration to jiff pending" },
+  { id = "RUSTSEC-2026-0555", reason = "chrono-tz unmaintained; migration to jiff pending" },
+]
 
 [licenses]
 version = 2
