@@ -515,9 +515,8 @@ impl Interpreter {
                             &JsValue::number(n),
                         )));
                     }
-                    Completion::Normal(JsValue::string(JsString::from_str(&format!(
-                        "{n:.digits$}"
-                    ))))
+                    let s = super::number_fixed::to_fixed(n, digits);
+                    Completion::Normal(JsValue::from_str(&s))
                 }),
             ),
             (
