@@ -8943,9 +8943,8 @@ fn regexp_exec_raw(interp: &mut Interpreter, this_id: u64, regex_input: &RegexIn
             }
         }
         interp.regexp_legacy.last_paren = last_paren;
-        for p in 0..9 {
-            interp.regexp_legacy.parens[p] =
-                caps.capture(p + 1).map(|m| m.text()).unwrap_or_default();
+        for (s, p) in interp.regexp_legacy.parens.iter_mut().zip(1..) {
+            *s = caps.capture(p).map(|m| m.text()).unwrap_or_default();
         }
     }
 

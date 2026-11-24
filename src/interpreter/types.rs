@@ -5022,10 +5022,7 @@ pub(crate) fn is_valid_integer_index(ta: &TypedArrayInfo, index: f64) -> bool {
         return false; // -0
     }
     let len = typed_array_length(ta) as f64;
-    if index < 0.0 || index >= len {
-        return false;
-    }
-    true
+    (0.0..len).contains(&index)
 }
 
 /// Decode one typed-array element of `kind` from `buf` at byte `offset`.
