@@ -1,0 +1,13 @@
+# Accepted jsse-vs-node differences for scripts/run-differential.py.
+#
+# Each entry pins one corpus file to the exact divergence that was reviewed:
+# `fingerprint` is printed by the runner for every unapproved divergence. If
+# the divergence later changes shape, the file is reported as
+# "approved-but-changed"; if it goes away, the entry is reported as stale and
+# should be deleted. Prefer fixing the engine or the corpus file over adding
+# an entry, and say why the difference is acceptable (or which issue/PR fixes it).
+#
+# [[approved]]
+# file = "tests/differential/example.js"
+# fingerprint = "0123456789abcdef"
+# reason = "node prints X because of a host quirk; the spec requires Y (see #123)"

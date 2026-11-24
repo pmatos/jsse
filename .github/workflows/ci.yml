@@ -106,6 +106,17 @@ jobs:
       - name: Run test262-extra (tree-walker)
         run: uv run python scripts/run-test262.py --jsse ./target/release/jsse --test262 ./test262 test262-extra/ --no-bytecode --fail-on-failures
 
+      # Observe-only (continue-on-error) until the corpus settles: divergences
+      # show as a failed step and in the job summary but do not block the PR.
+      # See docs/agents/differential-testing.md.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.11.0
+
+      - name: Differential check vs node (observe-only)
+        continue-on-error: true
+        run: uv run python scripts/run-differential.py --jsse ./target/release/jsse --no-boa
+
       # The checked profile keeps debug assertions on at release speed, so the
       # GC temp-root stack discipline (strict LIFO release, balanced native
       # calls, jobs and runs; #331) is executed by real test262 workloads.

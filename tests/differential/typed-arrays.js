@@ -1,0 +1,13 @@
+const buf = new ArrayBuffer(8);
+const view = new DataView(buf);
+view.setFloat64(0, Math.PI);
+show(Array.from(new Uint8Array(buf)), view.getUint32(0, true), view.getInt16(6));
+const u8 = Uint8Array.from([250, 5, 260, -1]);
+show(u8, new Uint8ClampedArray([300, -5, 1.5, 2.5]), new Int8Array([200]), new Float32Array([0.1])[0]);
+const i32 = new Int32Array([5, -1, 3]);
+show(i32.sort(), i32.toReversed(), i32.subarray(1).length, i32.buffer.byteLength, Int32Array.BYTES_PER_ELEMENT);
+const resizable = new ArrayBuffer(4, { maxByteLength: 16 });
+const tracking = new Uint8Array(resizable);
+resizable.resize(12);
+show(tracking.length, resizable.resizable, resizable.slice(2, 6).byteLength);
+show(new BigInt64Array([-1n]), new Float64Array([1, 2]).map((x) => x / 3), Object.prototype.toString.call(u8));
