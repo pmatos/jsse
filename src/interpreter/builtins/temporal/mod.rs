@@ -3750,10 +3750,7 @@ pub(crate) fn is_valid_duration(
         + us * 1_000
         + ns;
     const MAX_TIME_DURATION: i128 = (1i128 << 53) * 1_000_000_000 - 1;
-    if total_ns > MAX_TIME_DURATION {
-        return false;
-    }
-    true
+    total_ns <= MAX_TIME_DURATION
 }
 
 // Rounding utilities
